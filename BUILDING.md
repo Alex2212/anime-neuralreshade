@@ -48,6 +48,8 @@ It also runs `anime_viewer.exe --test-quality` without displaying windows. This 
 
 `anime_viewer.exe --test-image input.png --engine cache/<engine>.plan --report evaluation/viewer-image.json` uses the same GPU inference/composite shaders on a static image and writes PNG comparisons with AA off, AA on and the default top HUD region restored. It is an offline diagnostic, not a live capture or latency measurement. Runtime dependencies must be beside that executable.
 
+Preview 3 also tests NIS 720p/1080p to 1440p, odd dimensions, flat border colors, full output coverage, unsupported scale rejection and exact native copying. Image diagnostics additionally save the raw model grid and a bilinear reference with the same finishing settings. For a native-sized source/model pair, the new grid must exactly match the legacy output, checking channel order and quantization. Keep the viewer, backend and PTX from the same release; the new viewer explicitly rejects a backend/PTX lacking native-grid support.
+
 `cel_benchmark.exe input.png output.png engine.plan width height rgb|bgr iterations backend_directory` runs a native GPU-resident capture/inference/output path. Use `identity` instead of an engine to test CUDA preprocessing/upscaling without a model. CPU input loading and final PNG readback are outside timing; this is not a game benchmark. A JSON report is written beside the PNG.
 
 `scripts/test_harness.ps1` uses a separately downloaded full-addon ReShade DLL in an isolated hidden D3D11 process. It verifies the addon is actually loaded, FX compilation, same-frame alternating-color output, two resizes, and clean shutdown. Diagnostic readbacks occur only in the test executable.
@@ -57,3 +59,5 @@ It also runs `anime_viewer.exe --test-quality` without displaying windows. This 
 `anime_viewer.exe --demo` runs the same animated source interactively without exiting automatically. Capture runs on a dedicated worker; the UI remains responsive during model initialization. Stop/restart waits for the worker to finish its current operation. Runtime profiles are scanned from `cache` beside the executable. Both model paths share the same backend/contract checks as the addon.
 
 Use `scripts/package.ps1` to assemble the public preview ZIP. Its allowlist excludes NVIDIA/ReShade binaries, weights, serialized engines, logs, personal local paths, and private evaluation data. The release contains setup scripts and documentation so dependencies can be acquired locally.
+
+`package.ps1 -RuntimeStage dist/local-preview3` and `test_harness.ps1 -RuntimeStage dist/local-preview3` can use a separate private staging directory while an older viewer is running. Compile the current `kernels.cu` into that directory and keep all staged components consistent. Never overwrite a loaded backend DLL.

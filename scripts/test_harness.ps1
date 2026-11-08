@@ -1,9 +1,10 @@
+param([string]$RuntimeStage='dist/local')
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 $dir=Join-Path $root 'build\harness'
 New-Item -ItemType Directory -Force $dir | Out-Null
 foreach($name in @('CelShade.addon64','cel_nvidia.dll','kernels.ptx','cudart64_12.dll','nvinfer_10.dll','cel_test_host.exe','CelShade.fx')){
-    Copy-Item -LiteralPath (Join-Path $root "dist\local\$name") -Destination $dir -Force
+    Copy-Item -LiteralPath (Join-Path (Join-Path $root $RuntimeStage) $name) -Destination $dir -Force
 }
 Copy-Item -LiteralPath (Join-Path $root 'external\reshade-runtime\ReShade64.dll') -Destination (Join-Path $dir 'dxgi.dll') -Force
 @'

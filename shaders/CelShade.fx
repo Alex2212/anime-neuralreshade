@@ -25,7 +25,7 @@ uniform bool CelLiteral < ui_category="Two tone"; ui_label="Literal two-color pa
 uniform float3 CelLightTint < ui_category="Two tone"; ui_label="Light color"; ui_type="color"; > = float3(1.0,0.96,0.88);
 uniform float3 CelShadowTint < ui_category="Two tone"; ui_label="Shadow color"; ui_type="color"; > = float3(0.24,0.22,0.34);
 uniform float CelTintStrength < ui_category="Two tone"; ui_label="Tint strength"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.1;
-uniform float CelOutlineStrength < ui_category="Outlines"; ui_label="Outline strength"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.4;
+uniform float CelOutlineStrength < ui_category="Outlines"; ui_label="Outline strength"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.0;
 uniform float CelOutlineWidth < ui_category="Outlines"; ui_label="Width in display pixels"; ui_type="slider"; ui_min=0.5; ui_max=3.0; > = 1.0;
 uniform float CelOutlineThreshold < ui_category="Outlines"; ui_label="Edge threshold"; ui_type="slider"; ui_min=0.01; ui_max=1.0; > = 0.16;
 uniform float CelSaturation < ui_category="Color"; ui_label="Saturation"; ui_type="slider"; ui_min=0.0; ui_max=2.0; > = 1.1;

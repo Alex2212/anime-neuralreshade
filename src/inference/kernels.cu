@@ -19,6 +19,13 @@ __device__ float sample(const float* t,float x,float y,int w,int h,int c) {
            (t[(y1*w+x0)*3+c]*(1-a)+t[(y1*w+x1)*3+c]*a)*b;
 }
 __device__ unsigned char quantize(float x) { return (unsigned char)(fminf(fmaxf((x+1)*127.5f,0),255)+0.5f); }
+// Native model grid for the external viewer's edge-adaptive upscaler. No resize here.
+extern "C" __global__ void pack_model(const float* tensor,cudaSurfaceObject_t dst,int mw,int mh,int bgr) {
+    int x=blockIdx.x*blockDim.x+threadIdx.x,y=blockIdx.y*blockDim.y+threadIdx.y;
+    if(x>=mw||y>=mh)return;
+    int i=(y*mw+x)*3;
+    surf2Dwrite(make_uchar4(quantize(tensor[i+(bgr?2:0)]),quantize(tensor[i+1]),quantize(tensor[i+(bgr?0:2)]),255),dst,x*4,y);
+}
 extern "C" __global__ void postprocess(const float* tensor,cudaSurfaceObject_t dst,cudaTextureObject_t src,
     int sw,int sh,int mw,int mh,int bgr) {
     int x=blockIdx.x*blockDim.x+threadIdx.x,y=blockIdx.y*blockDim.y+threadIdx.y;

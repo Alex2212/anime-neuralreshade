@@ -28,8 +28,8 @@ struct State {
     Logger logger;
     int device=0,w=0,h=0,sw=0,sh=0; bool bgr=false,identity=false;
     cudaStream_t stream{}; std::array<cudaEvent_t,4> events{};
-    cudaGraphicsResource* graphics[2]{};
-    CUmodule module{}; CUfunction pre{},post{};
+    cudaGraphicsResource* graphics[3]{};
+    CUmodule module{}; CUfunction pre{},post{},pack{};
     float *input{},*output{};
     std::unique_ptr<nvinfer1::IRuntime> runtime;
     std::unique_ptr<nvinfer1::ICudaEngine> engine;
@@ -85,6 +85,8 @@ void* create(const cel::BackendConfig* config,char* err,uint32_t cap){
         for(auto& e:s->events)ck(cudaEventCreate(&e));
         auto ptx=read(config->kernel_path);ptx.push_back(0);dk(cuModuleLoadData(&s->module,ptx.data()));
         dk(cuModuleGetFunction(&s->pre,s->module,"preprocess"));dk(cuModuleGetFunction(&s->post,s->module,"postprocess"));
+        // Optional for legacy PTX; the viewer extension rejects it explicitly if absent.
+        cuModuleGetFunction(&s->pack,s->module,"pack_model");
         size_t bytes=size_t(s->w)*s->h*3*sizeof(float);
         ck(cudaMalloc(reinterpret_cast<void**>(&s->input),bytes));ck(cudaMalloc(reinterpret_cast<void**>(&s->output),bytes));
         if(!s->identity){
@@ -130,13 +132,27 @@ bool bind(void* state,ID3D11Texture2D* input,ID3D11Texture2D* output,char* err,u
         return true;
     }catch(const std::exception& e){s.unbind();copy_error(err,cap,e.what());return false;}
 }
+bool bind_model_output(void* state,ID3D11Texture2D* texture,char* err,uint32_t cap){
+    auto& s=*static_cast<State*>(state);
+    try {
+        ck(cudaSetDevice(s.device));ck(cudaStreamSynchronize(s.stream));
+        if(s.graphics[2]){ck(cudaGraphicsUnregisterResource(s.graphics[2]));s.graphics[2]=nullptr;}
+        if(!texture)return true;
+        if(!s.pack)throw std::runtime_error("kernels.ptx lacks native model output; use the matching preview package");
+        D3D11_TEXTURE2D_DESC d{};texture->GetDesc(&d);
+        if(d.Width!=UINT(s.w)||d.Height!=UINT(s.h)||d.Format!=DXGI_FORMAT_R8G8B8A8_UNORM||d.SampleDesc.Count!=1||d.MipLevels!=1||d.ArraySize!=1)
+            throw std::runtime_error("Native model output texture must match the model grid in RGBA8");
+        ck(cudaGraphicsD3D11RegisterResource(&s.graphics[2],texture,cudaGraphicsRegisterFlagsSurfaceLoadStore));
+        ck(cudaGraphicsResourceSetMapFlags(s.graphics[2],cudaGraphicsMapFlagsWriteDiscard));return true;
+    }catch(const std::exception& e){if(s.graphics[2])cudaGraphicsUnregisterResource(s.graphics[2]);s.graphics[2]=nullptr;copy_error(err,cap,e.what());return false;}
+}
 bool process(void* state,cel::Timings* timing,char* err,uint32_t cap){
-    auto& s=*static_cast<State*>(state);bool mapped=false;cudaTextureObject_t tex{};cudaSurfaceObject_t surf{};
+    auto& s=*static_cast<State*>(state);bool mapped=false;cudaTextureObject_t tex{};cudaSurfaceObject_t surf{},model_surf{};int count=s.graphics[2]?3:2;
     try {
         ck(cudaSetDevice(s.device));
         if(!s.graphics[0]||!s.graphics[1])throw std::runtime_error("Textures are not bound");
         // Map/unmap provide the graphics-compute ownership handoff on this same adapter.
-        ck(cudaGraphicsMapResources(2,s.graphics,s.stream));mapped=true;
+        ck(cudaGraphicsMapResources(count,s.graphics,s.stream));mapped=true;
         cudaArray_t src{},dst{};
         ck(cudaGraphicsSubResourceGetMappedArray(&src,s.graphics[0],0,0));
         ck(cudaGraphicsSubResourceGetMappedArray(&dst,s.graphics[1],0,0));
@@ -151,12 +167,19 @@ bool process(void* state,cel::Timings* timing,char* err,uint32_t cap){
         if(s.identity)ck(cudaMemcpyAsync(s.output,s.input,size_t(s.w)*s.h*3*sizeof(float),cudaMemcpyDeviceToDevice,s.stream));
         else if(!s.context->enqueueV3(s.stream))throw std::runtime_error("TensorRT enqueue failed: "+s.logger.last_error);
         ck(cudaEventRecord(s.events[2],s.stream));
+        if(s.graphics[2]){
+            cudaArray_t model{};ck(cudaGraphicsSubResourceGetMappedArray(&model,s.graphics[2],0,0));
+            rd.res.array.array=model;ck(cudaCreateSurfaceObject(&model_surf,&rd));
+            void* args[]={&s.output,&model_surf,&s.w,&s.h,&bgr};
+            dk(cuLaunchKernel(s.pack,(s.w+15)/16,(s.h+15)/16,1,16,16,1,0,s.stream,args,nullptr));
+        }
         void* postArgs[]={&s.output,&surf,&tex,&s.sw,&s.sh,&s.w,&s.h,&bgr};
         dk(cuLaunchKernel(s.post,(s.sw+15)/16,(s.sh+15)/16,1,16,16,1,0,s.stream,postArgs,nullptr));
         ck(cudaEventRecord(s.events[3],s.stream));
         ck(cudaStreamSynchronize(s.stream)); // Correct same-frame output before graphics consumes it.
         ck(cudaDestroyTextureObject(tex));tex=0;ck(cudaDestroySurfaceObject(surf));surf=0;
-        ck(cudaGraphicsUnmapResources(2,s.graphics,s.stream));mapped=false;ck(cudaStreamSynchronize(s.stream));
+        if(model_surf){ck(cudaDestroySurfaceObject(model_surf));model_surf=0;}
+        ck(cudaGraphicsUnmapResources(count,s.graphics,s.stream));mapped=false;ck(cudaStreamSynchronize(s.stream));
         if(timing){
             ck(cudaEventElapsedTime(&timing->preprocess_ms,s.events[0],s.events[1]));
             ck(cudaEventElapsedTime(&timing->inference_ms,s.events[1],s.events[2]));
@@ -166,11 +189,12 @@ bool process(void* state,cel::Timings* timing,char* err,uint32_t cap){
         }
         return true;
     }catch(const std::exception& e){
-        cudaStreamSynchronize(s.stream);if(tex)cudaDestroyTextureObject(tex);if(surf)cudaDestroySurfaceObject(surf);
-        if(mapped){cudaGraphicsUnmapResources(2,s.graphics,s.stream);cudaStreamSynchronize(s.stream);}
+        cudaStreamSynchronize(s.stream);if(tex)cudaDestroyTextureObject(tex);if(surf)cudaDestroySurfaceObject(surf);if(model_surf)cudaDestroySurfaceObject(model_surf);
+        if(mapped){cudaGraphicsUnmapResources(count,s.graphics,s.stream);cudaStreamSynchronize(s.stream);}
         copy_error(err,cap,e.what());return false;
     }
 }
 const cel::BackendApi api{cel::backend_abi,create,destroy,bind,process};
 }
 extern "C" __declspec(dllexport) const cel::BackendApi* CelGetBackendApi(){return &api;}
+extern "C" __declspec(dllexport) bool CelBindModelOutput(void* state,ID3D11Texture2D* texture,char* error,uint32_t cap){return bind_model_output(state,texture,error,cap);}

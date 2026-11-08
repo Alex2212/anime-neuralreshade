@@ -1,0 +1,4 @@
+#pragma once
+namespace cel { inline constexpr char nis_shader_source[] = R"CEL_NIS_SHADER(
+@NIS_SHADER_SOURCE@
+)CEL_NIS_SHADER"; }

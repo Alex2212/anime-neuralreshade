@@ -21,4 +21,7 @@ struct BackendApi {
     bool (*process)(void*, Timings*, char*, uint32_t);
 };
 using GetBackendApi = const BackendApi* (*)();
+// Optional ABI-1 extension: export the model grid BEFORE display-size interpolation.
+// Existing addons keep using bind/process unchanged. Rebind this after each base bind.
+using BindModelOutput = bool (*)(void*, ID3D11Texture2D*, char*, uint32_t);
 }

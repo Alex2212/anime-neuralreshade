@@ -51,6 +51,8 @@ White-box tends to simplify surfaces more strongly. AnimeGAN retains more of the
 ## Features
 
 - External Windows Graphics Capture viewer: model selection, live neural blend, fixed DBZ finishing, split comparison, F10 bypass, and optional F9 click-through overlay. No game installation or process manipulation.
+- NVIDIA Image Scaling (NIS) in the viewer: edge-adaptive spatial scaling directly from the native model grid to capture resolution. A Processing quality dropdown lists installed resolutions for the selected model and precision. Capture/model/display dimensions and the active scaling path are shown separately.
+- Extra outlines are off by default to avoid doubling Xenoverse 2's existing cel-shading lines. The viewer's optional **Extra outlines** checkbox restores the added edge pass. The addon FX default and supplied DBZ preset also start without added outlines; color and shadow settings are retained.
 - Optional spatial edge anti-aliasing after styling, enabled by default. It reduces diagonal stair steps while preserving flat-region colors; it does not reconstruct missing detail or provide temporal AA.
 - Three editable HUD preservation regions in the viewer. Original capture pixels replace the styled pixels inside enabled masks after finishing/AA. The normal addon retains its existing two HUD exclusion rectangles.
 - Bounded two-frame capture pool, latest available frame processing capped at 60 FPS, GPU-only BGRA-to-RGBA conversion and compositing. No full-frame CPU transfer in normal viewer use.
@@ -76,6 +78,7 @@ The full captured frame contains the HUD. Both modes have manual exclusion regio
 5. Adjust **Neural blend**, **DBZ finishing**, or **Split comparison**. To change models, select a profile and click Start again. Stop ends capture. Closing the viewer controls exits the application.
 6. Keep **Smooth jagged edges** enabled to soften diagonal aliasing after the style pass. Toggle it for a direct comparison; the shading and palette parameters are unchanged.
 7. Enable **Preserve HUD regions** to keep the top HUD original. For training stats or the input panel, enable those rows and click **Apply HUD regions**. Edit Left/Top/Right/Bottom as percentages of the captured window (0-100). The defaults are starting points for Xenoverse 2; adjust them for your layout. Floating names, subtitles, menus and moving UI are not detected automatically.
+8. Keep **NVIDIA upscale (NIS)** enabled. Choose **Processing quality**, then Start to load that resolution. It lists only locally prepared profiles for the same model and precision: 720p Performance, 1080p Quality, and 1440p High detail when available. These are model-resolution choices, not DLSS modes. At a 1440p capture size, 1080p uses NIS and 1440p uses an exact native copy. Maximize or overlay the viewer to avoid an additional small-window display resize.
 
 If capture is blocked, the app cannot make that content available. A minimized source can stop supplying frames; restore it. Exclusive fullscreen, HDR, manual overlay behavior and EAC-protected Xenoverse combat remain unverified. The viewer has no recording, network upload, or telemetry feature. Its output can be captured by recording tools.
 
@@ -98,7 +101,7 @@ To remove: close the game, remove only the files/folders you installed for this 
 
 ## NVIDIA optimization and upscaling
 
-The optimized path uses TensorRT mixed FP16 and fixed shapes, with processing resolution independent of display resolution. Spatial bilinear upscaling is currently integrated in the output CUDA kernel; aspect ratio is preserved with edge padding and inverse mapping. No temporal history is blended.
+The optimized path uses TensorRT mixed FP16 and fixed shapes, with processing resolution independent of display resolution. The external viewer now receives an additional texture at the actual model resolution and runs **NVIDIA Image Scaling (NIS)** directly on that grid, before finishing, edge AA and original HUD restoration. NIS performs edge-adaptive spatial reconstruction for supported 1x-2x scaling; it is not AI super-resolution and cannot recover all detail removed by the style model. The native-size path copies exactly. Unsupported ratios and NIS-off use an explicitly labelled bilinear fallback. The normal ReShade addon retains its existing CUDA bilinear output path and ABI. No temporal history is blended. See the [NIS SDK](https://github.com/NVIDIAGameWorks/NVIDIAImageScaling).
 
 If a 1440p capture looks soft with a 1080p model, prepare a **native 2560x1440 White-box profile** with `scripts/setup_neural.ps1 -Height 1440 -Model whitebox`, then Refresh and select it. The capture resolution and model resolution are separate; a 1440p capture does not make a 1080p model operate at native detail. Native inference removes this rescaling step, but the model still intentionally simplifies textures. Compare with DBZ finishing disabled to isolate the model from the outline/shadow effect. Higher resolution needs additional GPU time.
 

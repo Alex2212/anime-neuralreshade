@@ -4,6 +4,7 @@ This repository's original addon/FX code is separate from upstream SDKs, models,
 
 | Component | Source / revision | Handling |
 |---|---|---|
+| NVIDIA Image Scaling SDK 1.0.3 | [NVIDIAGameWorks/NVIDIAImageScaling](https://github.com/NVIDIAGameWorks/NVIDIAImageScaling), `35e13ba316c98eeecf16f37eae70ce88019911f6` | MIT. Shader/config sources are vendored in `third_party/nis`, with documented local signed-coordinate correction. The included NVIDIA-Image-Scaling-LICENSE notice accompanies binaries. No DLSS SDK/runtime is included. |
 | ReShade API | [crosire/reshade](https://github.com/crosire/reshade), v6.1.1, `a59d611903db84355d562a2cb6da20d4d2761619` | Header notices state BSD-3-Clause OR MIT. Included notice text accompanies compiled addon releases. ReShade itself is downloaded separately. |
 | Dear ImGui | [ocornut/imgui](https://github.com/ocornut/imgui), `c6aa051629753f0ef0d26bf775a8b6a92aa213b2` | MIT. Matching header is used through ReShade's function table. Included notice accompanies binaries. |
 | AnimeGANv2 | [official repository](https://github.com/TachibanaYoshino/AnimeGANv2), `724b5ce75185c2e838d30c9077dbb967ab034254` | Upstream README restricts use to non-commercial purposes and gives a separate commercial-authorization route. This is not blanket approval to redistribute weights/conversions. Download for local evaluation; do not bundle weights or engines in public releases. |

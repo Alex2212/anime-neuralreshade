@@ -1,27 +1,29 @@
-﻿# Anime Neural ReShade 0.1.0 preview 2
+﻿# Anime Neural ReShade 0.1.0 preview 3
 
-Reduces diagonal pixelation in the external viewer and adds manual HUD preservation while retaining the existing DBZ shading, both model choices, and the normal ReShade addon.
+Adds NVIDIA Image Scaling directly from the model's native output grid and a Processing quality dropdown to the external viewer. Both neural models, the approved DBZ finishing, HUD masks, and the normal ReShade addon remain available.
 
 ## Changes
 
-- **Smooth jagged edges**: optional spatial edge anti-aliasing after styling, enabled by default. Flat-region colors and axis-aligned edges are preserved. This is not temporal AA or super resolution.
-- **Preserve HUD regions**: three editable percentage rectangles restore original captured pixels after finishing/AA. Starting layouts cover the top HUD, training stats and input panel. Only the top region is enabled initially; HUD preservation itself is opt-in. Edit and Apply to match your screen.
-- **Native 1440p White-box**: `scripts/setup_neural.ps1 -Height 1440 -Model whitebox` prepares a 2560x1440 FP16 profile locally. Existing 720p/1080p profiles remain available. Models and GPU-specific engines are not bundled.
-- Setup now handles TensorFlow stderr warnings using process exit status and skips copying already-identical runtime DLLs.
-- The normal `.addon64`, its effects and the shared inference backend remain unchanged. Both addon and external viewer are included.
+- Extra outlines now default off in the viewer and supplied addon preset, avoiding additional black lines over Xenoverse 2's cel shading. The viewer has an optional Extra outlines checkbox. Color and shadow settings are retained; lines already produced by the game or neural model are not removed.
+- NIS spatial edge-adaptive scaling from 720p/1080p to the 1440p capture, before finishing and HUD restoration. Native-sized inference uses an exact copy. Unsupported ratios and NIS-off explicitly report a bilinear fallback.
+- Processing quality lists locally prepared resolutions for the same model and precision: Performance (720p), Quality (1080p), High detail (1440p), when installed. Select one and click Start. These are not DLSS presets.
+- Status separates capture, model and display dimensions and identifies the active scaling path.
+- Optional backend export exposes the actual model grid. The normal addon retains its ABI and existing output path. Keep the viewer, backend DLL and kernels.ptx from the same release.
+- Pinned MIT-licensed NIS SDK sources and license are included. A documented FXC signed-coordinate correction fixes flat-color errors at the top/left image boundary.
 
-## Use
+## Try it
 
-Close the previous viewer and extract this ZIP into its own working directory outside the game folder. Reuse matching local runtime DLLs and `cache` profiles, or run the setup script. Launch `anime_viewer.exe`. Keep Smooth jagged edges enabled. Enable Preserve HUD regions and adjust/apply masks as needed.
+Close the previous viewer and extract the ZIP outside the game folder. Reuse matching local runtime DLLs and cache profiles, or run scripts/setup_neural.ps1. For a 1440p capture, select White-box FP16 at 1080p, keep NVIDIA upscale (NIS) enabled, and Start. Maximize or overlay the output to view at the intended display size. Compare NIS on/off with the same model, blend and finishing settings. Native 1440p remains available at higher GPU cost.
 
-The viewer receives the finished game window; it cannot access a separate UI render pass. Masks preserve scenery behind the HUD too. Moving names, menus and subtitles are not identified automatically.
+The viewer receives the finished game image; manual HUD masks also preserve scenery behind the HUD. It cannot access a separate UI pass. NIS is spatial reconstruction, not AI super-resolution, DLSS or frame generation, and cannot recover all detail removed by the model.
 
 ## Validation and limits
 
-- Native build and both CTests passed. Actual viewer shaders were checked at 128x96, 512x288 and 2560x1440: 4,368 diagonal pixels softened, 3,820,513 flat pixels unchanged, exact bypass/disabled AA/split original half/straight edges.
-- 3,365,376 HUD-pixel checks passed with AA on/off; masked pixels match the original and output outside masks remains unchanged.
-- Native 1440p White-box passed export and GPU parity checks: maximum channel error 5.044, mean 0.255 versus ONNX CPU.
-- Native 1440p static processing p95 was 18.78 ms under concurrent desktop/game load, before viewer finishing/presentation. It is a quality option, not a 60 FPS guarantee. Keep 1080p plus AA available for comparison.
-- Static combat output was inspected through the actual inference and viewer finishing shaders. Live motion quality and the new UI controls still need in-game acceptance.
+- Native build and both CTests passed, including NIS 720p/1080p to 1440p, odd dimensions, flat border colors, output coverage, exact native copying and unsupported-ratio rejection.
+- Existing edge-AA, original HUD restoration, split and bypass GPU checks still pass.
+- Actual static combat frames processed with White-box 1080p/1440p and AnimeGAN 720p. Native grid and legacy native output match exactly for both RGB/BGR model paths.
+- White-box 1080p FP16 versus ONNX remains within tolerance: max 6.1784, mean 0.2552 channel levels.
+- Isolated ReShade identity harness passed with the new backend/PTX: 21 samples, 226 ready frames, zero failures, including resizes and shutdown.
+- Live NIS motion quality, sustained combat performance and manual quality-dropdown acceptance remain pending. This is not a verified 60 FPS or complete pixelation fix.
 
-This remains a development preview. The external viewer installs no game DLL and does not bypass EAC; per-game capture compatibility still applies. The tested Xenoverse 2 EAC launch rejected full-addon ReShade. ReShade, NVIDIA runtime DLLs, model weights and engines are downloaded/prepared separately. See README, BUILDING and THIRD_PARTY_NOTICES for setup and model restrictions.
+This is a development preview. The external viewer installs no game DLL and does not bypass EAC. Per-game capture compatibility still applies. NVIDIA runtime DLLs, ReShade, model weights and GPU-specific engines are acquired separately; see README and THIRD_PARTY_NOTICES.

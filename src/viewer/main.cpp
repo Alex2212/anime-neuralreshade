@@ -1,5 +1,6 @@
 // External window capture. This executable never opens or modifies a game process.
 #include "interop/frame_bridge.hpp"
+#include "interop/nis_scaler.hpp"
 #include "inference/backend_api.hpp"
 #include <d3dcompiler.h>
 #include <dxgi1_2.h>
@@ -36,15 +37,19 @@ using Clock = std::chrono::steady_clock;
 namespace {
 constexpr UINT refresh_timer = 1;
 constexpr int source_id=101, profile_id=102, refresh_id=103, start_id=104, stop_id=105,
-    bypass_id=106, finish_id=107, split_id=108, overlay_id=109, strength_id=110, aa_id=111, hud_id=112, hud_apply_id=113;
+    bypass_id=106, finish_id=107, split_id=108, overlay_id=109, strength_id=110, aa_id=111, hud_id=112, hud_apply_id=113, nis_id=114, quality_id=115, outlines_id=116;
 const wchar_t* window_class = L"AnimeNeuralViewer";
 fs::path base;
 HWND controls{}, viewer{}, source_combo{}, profile_combo{}, status_label{}, strength_combo{}, test_source{};
-HWND bypass_box{}, finish_box{}, split_box{}, overlay_box{}, aa_box{};
+HWND bypass_box{}, finish_box{}, split_box{}, overlay_box{}, aa_box{}, nis_box{};
+HWND quality_combo{};
+HWND outlines_box{};
 HWND hud_box{}, hud_region_boxes[3]{}, hud_edits[3][4]{};
 std::atomic<bool> stop_requested{false}, bypass{false}, finishing{true}, split{false}, running{false};
 std::atomic<float> strength{0.85f};
 std::atomic<bool> edge_aa{true};
+std::atomic<bool> use_nis{true};
+std::atomic<bool> extra_outlines{false};
 std::atomic<bool> preserve_hud{false};
 using Rectangles=std::array<std::array<float,4>,3>;
 std::mutex hud_mutex;
@@ -66,7 +71,7 @@ void status(std::wstring s) { std::lock_guard lock(status_mutex); status_text=st
 std::wstring ini(const fs::path& p,const wchar_t* key,const wchar_t* fallback=L"") {
     wchar_t value[1024]{}; GetPrivateProfileStringW(L"Engine",key,fallback,value,1024,p.c_str());return value;
 }
-struct Profile { fs::path engine; std::wstring label; int width=1280,height=720; bool bgr=false; };
+struct Profile { fs::path engine; std::wstring label; int width=1280,height=720; bool bgr=false; std::wstring name,precision; };
 std::vector<Profile> profiles;
 Profile load_profile(const fs::path& path) {
     Profile p; p.engine=fs::absolute(path); auto contract=fs::path(p.engine.wstring()+L".ini");
@@ -74,8 +79,22 @@ Profile load_profile(const fs::path& path) {
     p.height=GetPrivateProfileIntW(L"Engine",L"Height",0,contract.c_str());
     if(p.width<16||p.height<16||p.width>8192||p.height>8192) throw std::runtime_error("Invalid or missing engine dimensions in .plan.ini");
     p.bgr=ini(contract,L"Color")==L"BGR";
-    p.label=ini(contract,L"Name",L"Model")+L" | "+std::to_wstring(p.width)+L"x"+std::to_wstring(p.height)+L" | "+ini(contract,L"Precision");
+    p.name=ini(contract,L"Name",L"Model");p.precision=ini(contract,L"Precision");
+    p.label=p.name+L" | "+std::to_wstring(p.width)+L"x"+std::to_wstring(p.height)+L" | "+p.precision;
     return p;
+}
+void refresh_quality() {
+    SendMessageW(quality_combo,CB_RESETCONTENT,0,0);
+    auto selected=SendMessageW(profile_combo,CB_GETCURSEL,0,0);if(selected==CB_ERR)return;
+    const auto& current=profiles.at(size_t(selected));std::vector<size_t> choices;
+    for(size_t i=0;i<profiles.size();++i)if(profiles[i].name==current.name&&profiles[i].precision==current.precision)choices.push_back(i);
+    std::sort(choices.begin(),choices.end(),[](size_t a,size_t b){return profiles[a].height>profiles[b].height;});
+    for(auto i:choices){const auto& p=profiles[i];
+        std::wstring label=p.engine.empty()?L"Finishing only":std::to_wstring(p.width)+L"x"+std::to_wstring(p.height)+
+            (p.height>=1440?L" - High detail":p.height>=1080?L" - Quality":L" - Performance");
+        auto item=SendMessageW(quality_combo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(label.c_str()));
+        SendMessageW(quality_combo,CB_SETITEMDATA,item,LPARAM(i));if(i==size_t(selected))SendMessageW(quality_combo,CB_SETCURSEL,item,0);
+    }
 }
 void refresh_profiles() {
     SendMessageW(profile_combo,CB_RESETCONTENT,0,0); profiles.clear(); profiles.push_back({{},L"Finishing only (no NVIDIA runtime needed)"});
@@ -85,6 +104,7 @@ void refresh_profiles() {
     }} catch(const std::exception& e) {status(L"Profile scan: "+widen(e.what()));}
     for(const auto& p:profiles) SendMessageW(profile_combo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(p.label.c_str()));
     SendMessageW(profile_combo,CB_SETCURSEL,0,0);
+    refresh_quality();
 }
 BOOL CALLBACK enumerate_window(HWND h,LPARAM) {
     DWORD pid{};GetWindowThreadProcessId(h,&pid);
@@ -127,7 +147,7 @@ struct Capture {
 // BGRA capture is sampled through a typed SRV, then rendered into owned RGBA8.
 // No copy between incompatible BGRA/RGBA formats and no CPU readback in normal use.
 constexpr char shader[]=R"(
-cbuffer Settings : register(b0) { float2 texel; float blend; float stylize; float compare; float aa; float hud; float padding; float4 hudRects[3]; };
+cbuffer Settings : register(b0) { float2 texel; float blend; float stylize; float compare; float aa; float hud; float outlines; float4 hudRects[3]; };
 Texture2D original : register(t0); Texture2D neural : register(t1); SamplerState linearClamp : register(s0);
 struct V { float4 position:SV_Position; float2 uv:TEXCOORD0; };
 V vs(uint id:SV_VertexID) { V o; o.uv=float2((id<<1)&2,id&2);o.position=float4(o.uv*float2(2,-2)+float2(-1,1),0,1);return o; }
@@ -140,9 +160,11 @@ float4 finish(V i):SV_Target {
  if(stylize>0.5) {
   float y=luma(c);float shade=lerp(.66,1.08,smoothstep(.40,.43,y));c*=shade;
   c=lerp(luma(c).xxx,c,1.18);
-  float edge=abs(luma(original.SampleLevel(linearClamp,i.uv+float2(texel.x,0),0).rgb)-luma(original.SampleLevel(linearClamp,i.uv-float2(texel.x,0),0).rgb));
-  edge+=abs(luma(original.SampleLevel(linearClamp,i.uv+float2(0,texel.y),0).rgb)-luma(original.SampleLevel(linearClamp,i.uv-float2(0,texel.y),0).rgb));
-  c*=1-.55*smoothstep(.09,.25,edge);
+  if(outlines>.5) {
+   float edge=abs(luma(original.SampleLevel(linearClamp,i.uv+float2(texel.x,0),0).rgb)-luma(original.SampleLevel(linearClamp,i.uv-float2(texel.x,0),0).rgb));
+   edge+=abs(luma(original.SampleLevel(linearClamp,i.uv+float2(0,texel.y),0).rgb)-luma(original.SampleLevel(linearClamp,i.uv-float2(0,texel.y),0).rgb));
+   c*=1-.55*smoothstep(.09,.25,edge);
+  }
  }
  return float4(saturate(c),1);
 }
@@ -181,13 +203,15 @@ float4 antialias(V i):SV_Target {
                  +.15*(original.SampleLevel(linearClamp,i.uv-tangent,0).rgb+original.SampleLevel(linearClamp,i.uv+tangent,0).rgb);
  return float4(lerp(c,filtered,amount),1);
 })";
-struct Constants {float x{},y{},blend{},stylize{},compare{},aa{},hud{},pad{};Rectangles rectangles{};};
+struct Constants {float x{},y{},blend{},stylize{},compare{},aa{},hud{},outlines{};Rectangles rectangles{};};
 struct Graphics {
     ComPtr<ID3D11Device> device;ComPtr<ID3D11DeviceContext> context;ComPtr<IDXGISwapChain1> swap;
     ComPtr<ID3D11VertexShader> vs;ComPtr<ID3D11PixelShader> copy,finish,antialias;
     ComPtr<ID3D11SamplerState> sampler;ComPtr<ID3D11Buffer> constants;
     ComPtr<ID3D11Texture2D> captured,composite;ComPtr<ID3D11ShaderResourceView> capture_view,composite_view;
     ComPtr<ID3D11Texture2D> antialiased;ComPtr<ID3D11ShaderResourceView> aa_view;ComPtr<ID3D11RenderTargetView> aa_target;bool aa_active=false;
+    ComPtr<ID3D11Texture2D> model_grid;ComPtr<ID3D11ShaderResourceView> model_view;cel::NisScaler scaler;UINT model_width=0,model_height=0;
+    const char* scale_path="Finishing only";
     ComPtr<ID3D11RenderTargetView> input_target,final_target,back_target;
     cel::FrameBridge bridge;UINT swap_width=0,swap_height=0;
     void initialize(HWND target) {
@@ -223,6 +247,13 @@ struct Graphics {
         check(device->CreateShaderResourceView(antialiased.Get(),nullptr,&aa_view),"AA SRV");
         desc.Format=DXGI_FORMAT_B8G8R8A8_UNORM;desc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
         check(device->CreateTexture2D(&desc,nullptr,&captured),"Capture texture");check(device->CreateShaderResourceView(captured.Get(),nullptr,&capture_view),"Capture SRV");
+        if(model_grid)scaler.resize(width,height);
+    }
+    void configure_model(UINT width,UINT height) {
+        model_width=width;model_height=height;scaler.initialize(device.Get());
+        D3D11_TEXTURE2D_DESC desc{};desc.Width=width;desc.Height=height;desc.MipLevels=desc.ArraySize=desc.SampleDesc.Count=1;desc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;desc.BindFlags=D3D11_BIND_SHADER_RESOURCE|D3D11_BIND_RENDER_TARGET;
+        model_view.Reset();model_grid.Reset();check(device->CreateTexture2D(&desc,nullptr,&model_grid),"Native model texture");check(device->CreateShaderResourceView(model_grid.Get(),nullptr,&model_view),"Native model view");
+        if(bridge.width())scaler.resize(bridge.width(),bridge.height());
     }
     void draw(ID3D11RenderTargetView* target,ID3D11ShaderResourceView* a,ID3D11ShaderResourceView* b,ID3D11PixelShader* ps,D3D11_VIEWPORT viewport,const Constants& values) {
         context->UpdateSubresource(constants.Get(),0,nullptr,&values,0,0);ID3D11Buffer* cb=constants.Get();context->PSSetConstantBuffers(0,1,&cb);
@@ -237,10 +268,17 @@ struct Graphics {
         draw(input_target.Get(),capture_view.Get(),nullptr,copy.Get(),full(),{});
     }
     void compose(bool neural,bool raw) {
+        ID3D11ShaderResourceView* processed=neural?bridge.output_view():bridge.original_view();
+        scale_path=raw?"Bypass":neural?"Bilinear (NIS off)":"Finishing only";
+        if(neural&&!raw&&use_nis&&model_grid) {
+            if(scaler.process(context.Get(),model_view.Get(),model_width,model_height)) {
+                processed=scaler.view();scale_path=(model_width==bridge.width()&&model_height==bridge.height())?"Native model (no upscale)":"NIS from native model grid";
+            }else scale_path="Bilinear fallback: NIS supports 1x-2x";
+        }
         Constants c{1.f/bridge.width(),1.f/bridge.height(),neural&&!raw?strength.load():0.f,!raw&&finishing?1.f:0.f,!raw&&split?1.f:0.f};
-        c.aa=edge_aa?1.f:0.f;c.hud=preserve_hud&&!raw?1.f:0.f;
+        c.aa=edge_aa?1.f:0.f;c.hud=preserve_hud&&!raw?1.f:0.f;c.outlines=extra_outlines?1.f:0.f;
         if(c.hud>.5f){std::lock_guard lock(hud_mutex);c.rectangles=hud_regions;}
-        draw(final_target.Get(),bridge.original_view(),neural?bridge.output_view():bridge.original_view(),finish.Get(),full(),c);
+        draw(final_target.Get(),bridge.original_view(),processed,finish.Get(),full(),c);
         aa_active=!raw&&(edge_aa||preserve_hud);
         // Restore native captured HUD pixels after all styling and edge filtering.
         if(aa_active)draw(aa_target.Get(),composite_view.Get(),bridge.original_view(),antialias.Get(),full(),c);
@@ -264,6 +302,7 @@ struct Graphics {
 };
 struct Backend {
     HMODULE library{};const cel::BackendApi* api{};void* state{};
+    cel::BindModelOutput bind_grid{};
     ~Backend(){if(state)api->destroy(state);if(library)FreeLibrary(library);}
     void open(const Profile& p,ID3D11Device* device) {
         if(p.engine.empty())return;
@@ -271,10 +310,12 @@ struct Backend {
         if(!library)throw std::runtime_error("NVIDIA backend unavailable (Windows error "+std::to_string(GetLastError())+"). Run scripts/setup_neural.ps1, or select Finishing only.");
         auto get=reinterpret_cast<cel::GetBackendApi>(GetProcAddress(library,"CelGetBackendApi"));
         if(!get||!(api=get())||api->abi!=cel::backend_abi)throw std::runtime_error("NVIDIA backend ABI mismatch");
+        bind_grid=reinterpret_cast<cel::BindModelOutput>(GetProcAddress(library,"CelBindModelOutput"));
+        if(!bind_grid)throw std::runtime_error("This viewer requires the matching NIS-capable cel_nvidia.dll and kernels.ptx");
         auto kernel=base/L"kernels.ptx";cel::BackendConfig config;config.device=device;config.engine_path=p.engine.c_str();config.kernel_path=kernel.c_str();config.width=p.width;config.height=p.height;config.bgr=p.bgr;
         char error[2048]{};state=api->create(&config,error,sizeof(error));if(!state)throw std::runtime_error(error);
     }
-    void bind(cel::FrameBridge& bridge) {if(!state)return;char error[2048]{};if(!api->bind(state,bridge.input(),bridge.output(),error,sizeof(error)))throw std::runtime_error(error);}
+    void bind(Graphics& graphics) {if(!state)return;char error[2048]{};if(!api->bind(state,graphics.bridge.input(),graphics.bridge.output(),error,sizeof(error)))throw std::runtime_error(error);if(!bind_grid(state,graphics.model_grid.Get(),error,sizeof(error)))throw std::runtime_error(error);}
     cel::Timings process() {cel::Timings t{};if(state){char error[2048]{};if(!api->process(state,&t,error,sizeof(error)))throw std::runtime_error(error);}return t;}
 };
 void run_quality_test() {
@@ -320,7 +361,30 @@ void run_quality_test() {
         g.compose(false,true);if(g.read_pixels(g.result_texture())!=input)throw std::runtime_error("HUD bypass is not exact");
         preserve_hud=false;edge_aa=true;finishing=false;
     }
-    std::ofstream(report_path)<<"{\"passed\":true,\"resource_sizes\":"<<sizes<<",\"diagonal_pixels_softened\":"<<softened<<",\"flat_pixels_unchanged\":"<<flat_checked<<",\"hud_pixels_restored\":"<<hud_checked<<",\"bypass_exact\":true,\"disabled_exact\":true,\"split_original_exact\":true,\"axis_aligned_edges_exact\":true,\"styled_flat_colors_exact\":true,\"hud_outside_exact\":true}\n";
+    size_t nis_different=0,nis_nonreplicated=0;unsigned nis_cases=0;
+    for(auto dims:{std::array<UINT,4>{1280,720,2560,1440},{1920,1080,2560,1440},{129,73,257,145},{128,96,128,96}}) {
+        auto [mw,mh,w,h]=dims;g.resize(w,h);g.configure_model(mw,mh);
+        std::vector<uint8_t> grid(size_t(mw)*mh*4);
+        for(UINT y=0;y<mh;++y)for(UINT x=0;x<mw;++x){size_t p=(size_t(y)*mw+x)*4;bool light=float(y)>.15f*mh+float(x)*.6f*mh/mw;
+            grid[p]=light?220:20;grid[p+1]=light?180:40;grid[p+2]=light?140:60;grid[p+3]=255;}
+        g.context->UpdateSubresource(g.model_grid.Get(),0,nullptr,grid.data(),mw*4,0);
+        const float marker[]={1,0,1,1};g.context->ClearRenderTargetView(g.final_target.Get(),marker);
+        g.draw(g.final_target.Get(),g.model_view.Get(),nullptr,g.copy.Get(),g.full(),{});auto bilinear=g.read_pixels(g.composite.Get());
+        if(!g.scaler.process(g.context.Get(),g.model_view.Get(),mw,mh))throw std::runtime_error("NIS rejected a supported scale");
+        auto scaled=g.read_pixels(g.scaler.texture());++nis_cases;
+        if(mw==w&&mh==h){if(scaled!=grid)throw std::runtime_error("Native grid path is not exact");continue;}
+        size_t changed=0,nonreplicated=0;
+        for(UINT y=0;y<h;++y)for(UINT x=0;x<w;++x){size_t p=(size_t(y)*w+x)*4;size_t q=(size_t(std::min(mh-1,UINT((uint64_t(y)*mh)/h)))*mw+std::min(mw-1,UINT((uint64_t(x)*mw)/w)))*4;
+            if(scaled[p+3]!=255)throw std::runtime_error("NIS missed an output pixel or changed alpha");
+            if(memcmp(scaled.data()+p,bilinear.data()+p,3)!=0)++changed;
+            if(memcmp(scaled.data()+p,grid.data()+q,3)!=0)++nonreplicated;
+            if(y<h/16)for(int c=0;c<3;++c)if(abs(int(scaled[p+c])-int(grid[c]))>1)throw std::runtime_error("NIS changed flat colors: model="+std::to_string(mw)+"x"+std::to_string(mh)+" output="+std::to_string(w)+"x"+std::to_string(h)+" pixel="+std::to_string(x)+","+std::to_string(y)+" channel="+std::to_string(c)+" actual="+std::to_string(scaled[p+c])+" expected="+std::to_string(grid[c]));
+        }
+        if(changed<32||nonreplicated<32)throw std::runtime_error("NIS produced bilinear or pixel-replicated output");nis_different+=changed;nis_nonreplicated+=nonreplicated;
+        // Unsupported ratios must be explicit, not silently dispatch with invalid constants.
+        if(g.scaler.process(g.context.Get(),g.model_view.Get(),16,16))throw std::runtime_error("NIS accepted unsupported scaling");
+    }
+    std::ofstream(report_path)<<"{\"passed\":true,\"resource_sizes\":"<<sizes<<",\"diagonal_pixels_softened\":"<<softened<<",\"flat_pixels_unchanged\":"<<flat_checked<<",\"hud_pixels_restored\":"<<hud_checked<<",\"bypass_exact\":true,\"disabled_exact\":true,\"split_original_exact\":true,\"axis_aligned_edges_exact\":true,\"styled_flat_colors_exact\":true,\"hud_outside_exact\":true,\"nis_cases\":"<<nis_cases<<",\"nis_pixels_different_from_bilinear\":"<<nis_different<<",\"nis_pixels_not_replicated\":"<<nis_nonreplicated<<",\"native_grid_exact\":true}\n";
 }
 void run_image_test(const Profile& profile) {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -329,22 +393,28 @@ void run_image_test(const Profile& profile) {
     ComPtr<IWICBitmapFrameDecode> frame;check(decoder->GetFrame(0,&frame),"Image test frame");ComPtr<IWICFormatConverter> converter;check(factory->CreateFormatConverter(&converter),"Image test converter");
     check(converter->Initialize(frame.Get(),GUID_WICPixelFormat32bppRGBA,WICBitmapDitherTypeNone,nullptr,0,WICBitmapPaletteTypeCustom),"Image test RGBA");
     UINT w{},h{};check(converter->GetSize(&w,&h),"Image test dimensions");std::vector<uint8_t> pixels(size_t(w)*h*4);check(converter->CopyPixels(nullptr,w*4,UINT(pixels.size()),pixels.data()),"Image test pixels");
-    Graphics g;g.initialize(viewer);g.resize(w,h);Backend backend;backend.open(profile,g.device.Get());backend.bind(g.bridge);
+    Graphics g;g.initialize(viewer);g.resize(w,h);if(!profile.engine.empty())g.configure_model(profile.width,profile.height);Backend backend;backend.open(profile,g.device.Get());backend.bind(g);
     g.context->UpdateSubresource(g.bridge.input(),0,nullptr,pixels.data(),w*4,0);if(backend.state)backend.process();
-    auto save=[&](const fs::path& path,std::vector<uint8_t> rgba) {
+    auto save=[&](const fs::path& path,std::vector<uint8_t> rgba,UINT width,UINT height) {
         for(size_t i=0;i<rgba.size();i+=4)std::swap(rgba[i],rgba[i+2]);
         ComPtr<IWICStream> stream;check(factory->CreateStream(&stream),"Image test stream");check(stream->InitializeFromFilename(path.c_str(),GENERIC_WRITE),"Image test output");
         ComPtr<IWICBitmapEncoder> encoder;check(factory->CreateEncoder(GUID_ContainerFormatPng,nullptr,&encoder),"Image test encoder");check(encoder->Initialize(stream.Get(),WICBitmapEncoderNoCache),"Image test encoder init");
-        ComPtr<IWICBitmapFrameEncode> output;check(encoder->CreateNewFrame(&output,nullptr),"Image test output frame");check(output->Initialize(nullptr),"Image test frame init");check(output->SetSize(w,h),"Image test size");
+        ComPtr<IWICBitmapFrameEncode> output;check(encoder->CreateNewFrame(&output,nullptr),"Image test output frame");check(output->Initialize(nullptr),"Image test frame init");check(output->SetSize(width,height),"Image test size");
         WICPixelFormatGUID format=GUID_WICPixelFormat32bppBGRA;check(output->SetPixelFormat(&format),"Image test format");if(format!=GUID_WICPixelFormat32bppBGRA)throw std::runtime_error("PNG encoder rejected BGRA");
-        check(output->WritePixels(h,w*4,UINT(rgba.size()),rgba.data()),"Image test write");check(output->Commit(),"Image test frame commit");check(encoder->Commit(),"Image test encoder commit");
+        check(output->WritePixels(height,width*4,UINT(rgba.size()),rgba.data()),"Image test write");check(output->Commit(),"Image test frame commit");check(encoder->Commit(),"Image test encoder commit");
     };
     auto prefix=report_path.parent_path()/report_path.stem();
-    edge_aa=false;g.compose(backend.state!=nullptr,false);auto before=g.read_pixels(g.result_texture());save(prefix.wstring()+L"-aa-off.png",before);
-    edge_aa=true;g.compose(backend.state!=nullptr,false);auto after=g.read_pixels(g.result_texture());save(prefix.wstring()+L"-aa-on.png",after);
-    preserve_hud=true;g.compose(backend.state!=nullptr,false);save(prefix.wstring()+L"-aa-on-hud.png",g.read_pixels(g.result_texture()));preserve_hud=false;
+    if(backend.state){auto grid=g.read_pixels(g.model_grid.Get());
+        if(w==g.model_width&&h==g.model_height&&grid!=g.read_pixels(g.bridge.output()))throw std::runtime_error("Native model grid differs from legacy output");
+        save(prefix.wstring()+L"-model-grid.png",std::move(grid),g.model_width,g.model_height);
+    }
+    edge_aa=false;use_nis=false;g.compose(backend.state!=nullptr,false);save(prefix.wstring()+L"-bilinear.png",g.read_pixels(g.result_texture()),w,h);use_nis=true;
+    g.compose(backend.state!=nullptr,false);auto before=g.read_pixels(g.result_texture());save(prefix.wstring()+L"-aa-off.png",before,w,h);
+    edge_aa=true;g.compose(backend.state!=nullptr,false);auto after=g.read_pixels(g.result_texture());save(prefix.wstring()+L"-aa-on.png",after,w,h);
+    extra_outlines=true;g.compose(backend.state!=nullptr,false);save(prefix.wstring()+L"-outlines-on.png",g.read_pixels(g.result_texture()),w,h);extra_outlines=false;
+    preserve_hud=true;g.compose(backend.state!=nullptr,false);save(prefix.wstring()+L"-aa-on-hud.png",g.read_pixels(g.result_texture()),w,h);preserve_hud=false;
     size_t changed=0;for(size_t p=0;p<before.size();p+=4)if(memcmp(before.data()+p,after.data()+p,4)!=0)++changed;
-    std::ofstream(report_path)<<"{\"passed\":true,\"width\":"<<w<<",\"height\":"<<h<<",\"aa_changed_pixels\":"<<changed<<",\"total_pixels\":"<<size_t(w)*h<<",\"neural\":"<<(backend.state?"true":"false")<<"}\n";
+    std::ofstream(report_path)<<"{\"passed\":true,\"width\":"<<w<<",\"height\":"<<h<<",\"model_width\":"<<g.model_width<<",\"model_height\":"<<g.model_height<<",\"scale_path\":\""<<g.scale_path<<"\",\"aa_changed_pixels\":"<<changed<<",\"total_pixels\":"<<size_t(w)*h<<",\"neural\":"<<(backend.state?"true":"false")<<"}\n";
 }
 double percentile(std::vector<double> values,double p) {if(values.empty())return 0;std::sort(values.begin(),values.end());return values[std::min(values.size()-1,size_t(p*values.size()))];}
 void capture_worker(HWND source,Profile profile) {
@@ -353,7 +423,7 @@ void capture_worker(HWND source,Profile profile) {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
         // Destruction order: capture closes before CUDA unregisters and before D3D resources die.
         Graphics graphics;graphics.initialize(viewer);Backend backend;
-        status(L"Preparing "+profile.label+L"...");backend.open(profile,graphics.device.Get());
+        status(L"Preparing "+profile.label+L"...");if(!profile.engine.empty())graphics.configure_model(profile.width,profile.height);backend.open(profile,graphics.device.Get());
         Capture capture;capture.open(source,graphics.device.Get());auto pool_size=capture.item.Size();
         auto last_frame=Clock::now(),last_status=last_frame,next_frame=last_frame;unsigned status_frames=0;
         LARGE_INTEGER frequency{};QueryPerformanceFrequency(&frequency);
@@ -378,7 +448,7 @@ void capture_worker(HWND source,Profile profile) {
             ComPtr<ID3D11Texture2D> texture;winrt::check_hresult(surface->GetInterface(IID_PPV_ARGS(&texture)));
             D3D11_TEXTURE2D_DESC desc{};texture->GetDesc(&desc);
             if(UINT(size.Width)>desc.Width||UINT(size.Height)>desc.Height) {frame.Close();continue;}
-            if(UINT(size.Width)!=graphics.bridge.width()||UINT(size.Height)!=graphics.bridge.height()) {graphics.resize(size.Width,size.Height);backend.bind(graphics.bridge);++resizes;}
+            if(UINT(size.Width)!=graphics.bridge.width()||UINT(size.Height)!=graphics.bridge.height()) {graphics.resize(size.Width,size.Height);backend.bind(graphics);++resizes;}
             graphics.capture(texture.Get());texture.Reset();auto stamp=frame.SystemRelativeTime().count();frame.Close();
             bool raw=self_test?(frames<12):bypass.load();
             bool neural=backend.state&&!raw;cel::Timings timing{};
@@ -404,8 +474,8 @@ void capture_worker(HWND source,Profile profile) {
             ++frames;tested_frames=frames;last_capture_tick=GetTickCount64();
             if(Clock::now()-last_status>std::chrono::milliseconds(500)) {
                 double fps=(frames-status_frames)/std::chrono::duration<double>(Clock::now()-last_status).count();
-                std::wostringstream s;s.precision(2);s<<std::fixed<<profile.label<<L"\r\n"<<graphics.bridge.width()<<L" x "<<graphics.bridge.height()<<L" | "<<fps<<L" processed FPS | frame work "<<duration<<L" ms\r\n";
-                s<<L"Inference GPU "<<timing.inference_ms<<L" ms | capture timestamp delta "<<age<<L" ms\r\n"<<(raw?L"BYPASS":L"Styling")<<L" | capped at 60 processed FPS. Timestamp delta is not input latency.";status(s.str());last_status=Clock::now();status_frames=frames;
+                std::wostringstream s;s.precision(2);s<<std::fixed<<profile.label<<L"\r\nCapture "<<graphics.bridge.width()<<L"x"<<graphics.bridge.height()<<L" | Model "<<graphics.model_width<<L"x"<<graphics.model_height<<L" | Output "<<graphics.swap_width<<L"x"<<graphics.swap_height<<L"\r\n";
+                s<<widen(graphics.scale_path)<<L" | "<<fps<<L" processed FPS\r\nFrame work "<<duration<<L" ms | inference "<<timing.inference_ms<<L" ms\r\nCapture timestamp delta "<<age<<L" ms (not input latency)";status(s.str());last_status=Clock::now();status_frames=frames;
             }
             if(self_test&&frames>=100) {
                 if(resizes<2||verified<10||styled_checks<50||(!profile.engine.empty()&&neural_frames<50))throw std::runtime_error("Self-test did not cover resize, bypass and styling");
@@ -484,6 +554,12 @@ LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp) {
         if(message==WM_COMMAND) {
             switch(LOWORD(wp)) {
             case refresh_id:refresh_sources();refresh_profiles();break;
+            case profile_id:if(HIWORD(wp)==CBN_SELCHANGE)refresh_quality();break;
+            case quality_id:if(HIWORD(wp)==CBN_SELCHANGE){
+                auto item=SendMessageW(quality_combo,CB_GETCURSEL,0,0);
+                if(item!=CB_ERR)SendMessageW(profile_combo,CB_SETCURSEL,SendMessageW(quality_combo,CB_GETITEMDATA,item,0),0);
+                status(L"Quality selected. Click Start to load it; the model and precision are preserved.");
+            }break;
             case start_id: {
                 auto index=SendMessageW(source_combo,CB_GETCURSEL,0,0),p=SendMessageW(profile_combo,CB_GETCURSEL,0,0);
                 if(index==CB_ERR||p==CB_ERR) {status(L"Select a source window and profile.");break;}
@@ -495,6 +571,8 @@ LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp) {
             case bypass_id:bypass=SendMessageW(bypass_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
             case finish_id:finishing=SendMessageW(finish_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
             case aa_id:edge_aa=SendMessageW(aa_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
+            case nis_id:use_nis=SendMessageW(nis_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
+            case outlines_id:extra_outlines=SendMessageW(outlines_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
             case hud_id:preserve_hud=SendMessageW(hud_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
             case hud_apply_id:apply_hud_regions();break;
             case split_id:split=SendMessageW(split_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
@@ -533,7 +611,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         int count{};auto args=CommandLineToArgvW(GetCommandLineW(),&count);fs::path test_engine;
         for(int i=1;i<count;++i) {std::wstring arg=args[i];if(arg==L"--self-test")self_test=true;else if(arg==L"--test-quality")quality_test=true;else if(arg==L"--test-image"&&i+1<count)image_test_path=args[++i];else if(arg==L"--demo")demo=true;else if(arg==L"--engine"&&i+1<count)test_engine=args[++i];else if(arg==L"--report"&&i+1<count)report_path=args[++i];else {LocalFree(args);throw std::runtime_error("Options: --demo | --self-test | --test-quality | --test-image input.png [--engine engine.plan] [--report result.json]");}}LocalFree(args);
         WNDCLASSW wc{};wc.lpfnWndProc=window_proc;wc.hInstance=instance;wc.lpszClassName=window_class;wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);wc.hbrBackground=GetSysColorBrush(COLOR_WINDOW);RegisterClassW(&wc);
-        controls=CreateWindowExW(0,window_class,L"Anime Neural Viewer - external capture",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,60,60,680,632,nullptr,nullptr,instance,nullptr);
+        controls=CreateWindowExW(0,window_class,L"Anime Neural Viewer - external capture",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,60,60,680,672,nullptr,nullptr,instance,nullptr);
         viewer=CreateWindowExW(WS_EX_APPWINDOW,window_class,L"Anime Neural Viewer - styled output",WS_OVERLAPPEDWINDOW,760,180,960,580,nullptr,nullptr,instance,nullptr);
         if(quality_test){run_quality_test();DestroyWindow(viewer);DestroyWindow(controls);return 0;}
         if(!image_test_path.empty()){run_image_test(test_engine.empty()?Profile{}:load_profile(test_engine));DestroyWindow(viewer);DestroyWindow(controls);return 0;}
@@ -551,7 +629,9 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         overlay_box=control(L"BUTTON",L"Click-through overlay (F9)",BS_AUTOCHECKBOX|WS_TABSTOP,200,183,230,24,overlay_id);
         control(L"STATIC",L"Neural blend",0,450,186,90,20);strength_combo=control(L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_TABSTOP,548,181,98,180,strength_id);
         for(auto value:{L"0%",L"25%",L"50%",L"75%",L"85%",L"100%"})SendMessageW(strength_combo,CB_ADDSTRING,0,reinterpret_cast<LPARAM>(value));SendMessageW(strength_combo,CB_SETCURSEL,4,0);
-        aa_box=control(L"BUTTON",L"Smooth jagged edges (spatial anti-aliasing)",BS_AUTOCHECKBOX|WS_TABSTOP,16,218,430,24,aa_id);SendMessageW(aa_box,BM_SETCHECK,BST_CHECKED,0);
+        aa_box=control(L"BUTTON",L"Smooth jagged edges",BS_AUTOCHECKBOX|WS_TABSTOP,16,218,210,24,aa_id);SendMessageW(aa_box,BM_SETCHECK,BST_CHECKED,0);
+        nis_box=control(L"BUTTON",L"NVIDIA upscale (NIS)",BS_AUTOCHECKBOX|WS_TABSTOP,236,218,210,24,nis_id);SendMessageW(nis_box,BM_SETCHECK,BST_CHECKED,0);
+        outlines_box=control(L"BUTTON",L"Extra outlines",BS_AUTOCHECKBOX|WS_TABSTOP,456,218,190,24,outlines_id);
         hud_box=control(L"BUTTON",L"Preserve HUD regions (original captured pixels)",BS_AUTOCHECKBOX|WS_TABSTOP,16,252,440,24,hud_id);
         control(L"BUTTON",L"Apply HUD regions",WS_TABSTOP,480,250,166,26,hud_apply_id);
         control(L"STATIC",L"Enabled region",0,16,287,180,18);
@@ -565,8 +645,10 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
             for(int c=0;c<4;++c)hud_edits[r][c]=control(L"EDIT",defaults[r][c],WS_BORDER|ES_AUTOHSCROLL|WS_TABSTOP,210+c*108,309+r*28,90,23);
         }
         control(L"STATIC",L"Masks also preserve scenery behind the HUD. Edit bounds, then Apply HUD regions.",0,16,400,630,20);
-        status_label=control(L"STATIC",L"",0,16,440,630,84);
-        control(L"STATIC",L"Runs outside the game. Capture can be restricted by the game or Windows.\r\nOverlay appears only while the source has focus. F9 returns to a separate viewer.\r\nNo DLSS / frame generation. Neural models need local setup; see README.",0,16,532,630,58);
+        control(L"STATIC",L"Processing quality",0,16,435,180,20);
+        quality_combo=control(L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,210,430,436,180,quality_id);
+        status_label=control(L"STATIC",L"",0,16,480,630,84);
+        control(L"STATIC",L"Runs outside the game. Capture can be restricted by the game or Windows.\r\nQuality lists prepared resolutions for this model; click Start to apply.\r\nNIS is spatial upscaling, not DLSS / frame generation. See README.",0,16,572,630,58);
         refresh_sources();refresh_profiles();
         bool hotkeys=RegisterHotKey(controls,1,MOD_NOREPEAT,VK_F10)!=0;hotkeys=RegisterHotKey(controls,2,MOD_NOREPEAT,VK_F9)!=0&&hotkeys;
         if(!hotkeys)status(L"A global F9/F10 shortcut is in use. Use the visible bypass/overlay controls.");
