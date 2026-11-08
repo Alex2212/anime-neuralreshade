@@ -21,6 +21,8 @@ The viewer uses Windows Graphics Capture without loading code into a game. Real 
 - F9/F10 global hotkeys can conflict with another app. Visible controls still work. Manual overlay, DPI/multi-monitor, focus switching, and sustained game testing remain pending.
 - The optional overlay is non-activating and click-through; source focus determines visibility. It captures the selected source window rather than the desktop to avoid feeding its own output back into inference. It hides after two seconds without a fresh frame; static sources may therefore make it disappear until they update.
 - The viewer chooses an NVIDIA adapter when present. Same-machine cross-adapter behavior and non-NVIDIA finishing-only performance have not been tested.
+- The viewer cannot select a game UI render pass from a finished Windows capture. Enable Preserve HUD regions, adjust the percentage rectangles, and Apply. Masks keep original pixels for scenery too; moving names/menus require manual coverage. AA runs before the original HUD pixels are restored.
+- For pixelated diagonals, compare Smooth jagged edges on/off at the same model resolution. Native 1440p White-box is an optional quality profile; the measured concurrent-load processing p95 was 18.78 ms before viewer finishing/presentation, so it is not a 60 FPS guarantee.
 
 ### ReShade addon
 

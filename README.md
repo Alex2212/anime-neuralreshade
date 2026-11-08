@@ -51,6 +51,8 @@ White-box tends to simplify surfaces more strongly. AnimeGAN retains more of the
 ## Features
 
 - External Windows Graphics Capture viewer: model selection, live neural blend, fixed DBZ finishing, split comparison, F10 bypass, and optional F9 click-through overlay. No game installation or process manipulation.
+- Optional spatial edge anti-aliasing after styling, enabled by default. It reduces diagonal stair steps while preserving flat-region colors; it does not reconstruct missing detail or provide temporal AA.
+- Three editable HUD preservation regions in the viewer. Original capture pixels replace the styled pixels inside enabled masks after finishing/AA. The normal addon retains its existing two HUD exclusion rectangles.
 - Bounded two-frame capture pool, latest available frame processing capped at 60 FPS, GPU-only BGRA-to-RGBA conversion and compositing. No full-frame CPU transfer in normal viewer use.
 - Overlay follows the selected window, leaves input with that window, and hides when the source loses focus, minimizes, stops producing frames for two seconds, closes, or capture fails. Manual overlay acceptance is pending.
 - Native `.addon64` with a separately loaded NVIDIA backend. Missing or rejected neural dependencies keep the original image visible.
@@ -63,7 +65,7 @@ White-box tends to simplify surfaces more strongly. AnimeGAN retains more of the
 - F10 bypass by default, rebindable Windows virtual-key code, split comparison, two normalized HUD exclusion rectangles, presets, and reset controls.
 - Present FPS, processed FPS, frame correspondence, GPU stage timings, CPU callback duration, and tracked allocation size.
 
-The full captured frame may contain the HUD. The addon has manual exclusion rectangles; the first viewer version styles the entire window and has fixed finishing parameters. Automatic HUD preservation is not implemented. GPU kernel timings exclude graphics copies, synchronization, FX, and presentation. Viewer frame-work timing includes CPU submission/synchronous GPU waits and the Present call; it excludes time waiting for capture and display scan-out. Capture timestamp delta is a signed clock comparison, **not input latency**; compositor timestamps may be ahead of the local clock.
+The full captured frame contains the HUD. Both modes have manual exclusion regions; automatic HUD detection and access to a separate UI render pass are not implemented. The external viewer receives the final composed window, so a mask also leaves the scenery behind that HUD region unstyled. GPU kernel timings exclude graphics copies, synchronization, FX, and presentation. Viewer frame-work timing includes CPU submission/synchronous GPU waits and the Present call; it excludes time waiting for capture and display scan-out. Capture timestamp delta is a signed clock comparison, **not input latency**; compositor timestamps may be ahead of the local clock.
 
 ## External viewer: install and use
 
@@ -72,6 +74,8 @@ The full captured frame may contain the HUD. The addon has manual exclusion rect
 3. Start the game normally in SDR windowed/borderless mode. Launch `anime_viewer.exe`, select the game window and a prepared profile, and click **Start**. **Finishing only** can be used without model setup.
 4. The styled output opens in a separate window. Choose **Click-through overlay**, then focus the game, to place output over it. F9 returns to the separate viewer; F10 toggles bypass. If another app owns either shortcut, use the visible controls. The viewer does not synthesize or forward game input.
 5. Adjust **Neural blend**, **DBZ finishing**, or **Split comparison**. To change models, select a profile and click Start again. Stop ends capture. Closing the viewer controls exits the application.
+6. Keep **Smooth jagged edges** enabled to soften diagonal aliasing after the style pass. Toggle it for a direct comparison; the shading and palette parameters are unchanged.
+7. Enable **Preserve HUD regions** to keep the top HUD original. For training stats or the input panel, enable those rows and click **Apply HUD regions**. Edit Left/Top/Right/Bottom as percentages of the captured window (0-100). The defaults are starting points for Xenoverse 2; adjust them for your layout. Floating names, subtitles, menus and moving UI are not detected automatically.
 
 If capture is blocked, the app cannot make that content available. A minimized source can stop supplying frames; restore it. Exclusive fullscreen, HDR, manual overlay behavior and EAC-protected Xenoverse combat remain unverified. The viewer has no recording, network upload, or telemetry feature. Its output can be captured by recording tools.
 
@@ -95,6 +99,8 @@ To remove: close the game, remove only the files/folders you installed for this 
 ## NVIDIA optimization and upscaling
 
 The optimized path uses TensorRT mixed FP16 and fixed shapes, with processing resolution independent of display resolution. Spatial bilinear upscaling is currently integrated in the output CUDA kernel; aspect ratio is preserved with edge padding and inverse mapping. No temporal history is blended.
+
+If a 1440p capture looks soft with a 1080p model, prepare a **native 2560x1440 White-box profile** with `scripts/setup_neural.ps1 -Height 1440 -Model whitebox`, then Refresh and select it. The capture resolution and model resolution are separate; a 1440p capture does not make a 1080p model operate at native detail. Native inference removes this rescaling step, but the model still intentionally simplifies textures. Compare with DBZ finishing disabled to isolate the model from the outline/shadow effect. Higher resolution needs additional GPU time.
 
 **DLSS Super Resolution and DLSS Frame Generation are not implemented.** They require additional engine inputs and integration, including verified depth/motion data and, for FG, HUD-less color and presentation coordination. A finished-frame ReShade capture does not supply all of that. The project does not label spatial upscaling as DLSS or repeated model frames as 60 FPS. See the [NVIDIA DLSS guide](https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuideDLSS.md) and [FG guide](https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuideDLSS_G.md).
 

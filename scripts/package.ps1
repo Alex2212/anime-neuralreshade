@@ -1,11 +1,12 @@
-param([string]$Version='0.1.0-preview.1')
+param([string]$Version='0.1.0-preview.2')
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 $package=Join-Path $root "dist\anime-neuralreshade-$Version-windows-x64"
 if(Test-Path $package){throw 'Use a fresh version/package directory; refusing to mix old release contents'}
 New-Item -ItemType Directory -Force $package | Out-Null
 foreach($name in @('CelShade.addon64','cel_nvidia.dll','kernels.ptx','CelShade.fx','DBZ.ini','anime_viewer.exe')){
-    Copy-Item -LiteralPath (Join-Path $root "dist\local\$name") -Destination $package
+    $source=if($name -match '\.(exe|dll|addon64)$'){Join-Path $root "build\$name"}else{Join-Path $root "dist\local\$name"}
+    Copy-Item -LiteralPath $source -Destination $package
 }
 foreach($name in @('README.md','BUILDING.md','BENCHMARKS.md','COMPATIBILITY.md','THIRD_PARTY_NOTICES.md','DEVELOPMENT_STATUS.md')){Copy-Item -LiteralPath (Join-Path $root $name) -Destination $package}
 New-Item -ItemType Directory -Force (Join-Path $package 'scripts'),(Join-Path $package 'notices'),(Join-Path $package 'docs\images') | Out-Null

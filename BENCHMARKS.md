@@ -51,6 +51,14 @@ The signed QPC-minus-capture-timestamp measurement sometimes went negative (fini
 
 The restricted tool sandbox initially could not activate Windows capture services; the same executable passed when run normally on the interactive desktop. Manual UI/overlay inspection was stopped by the user before completion. Actual game capture, overlay input/focus, minimize/restart, long-duration memory behavior and protected-game compatibility remain unverified.
 
+## Preview 2 quality checks
+
+- Native White-box FP16 at 2560x1440: official TensorFlow versus ONNX max normalized error `4.41e-6`; native GPU versus ONNX max 5.044, mean 0.255 and p99 0.575 channel levels, within the existing tolerances.
+- 200 static 1440p iterations under the current concurrent desktop/game load: p50 15.48 ms, p95 18.78 ms, p99 19.02 ms; mean inference 9.64 ms. This run is not controlled against the earlier 1080p results and excludes viewer finishing/AA/presentation. It is not a 60 FPS result.
+- Real D3D11 viewer shader tests at 128x96, 512x288 and 2560x1440: 4,368 diagonal pixels softened; 3,820,513 flat pixels unchanged. Straight edges, bypass, disabled AA and the original half of split comparison remained exact.
+- 3,365,376 HUD-region pixel checks passed with AA enabled and disabled, with original capture pixels restored exactly inside masks and no differences outside compared with the corresponding unmasked rendering.
+- Full 2560x1440 static combat output was rendered through the actual viewer shaders with 1080p and 1440p neural profiles, including AA off/on and a restored top HUD. Motion quality, HUD layout coverage and live UI controls still require in-game acceptance.
+
 ## Required live acceptance
 
 Capture baseline, pass-through and neural modes at identical display settings and frame caps. For standing, camera orbit, close combat and particle-heavy attack scenes, collect three 60-second captures after warm-up, report p50/p95/p99 total frame time, present/processed FPS, stalls, allocation growth and frame age. Review faces, attacks, HUD, camera cuts and motion. Complete a 30-minute mixed gameplay run plus alt-tab, resize, bypass, profile-switch and shutdown checks. These checks remain pending.

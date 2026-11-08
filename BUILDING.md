@@ -18,6 +18,14 @@ The staged `dist/local` is a **private local test package** containing separatel
 
 For a downloaded binary release, use `scripts/setup_neural.ps1 -Python <Python311.exe>`. This fetches dependencies locally, converts both official models, builds mixed-FP16 720p engine profiles for the local GPU, and places the runtime DLLs and cache beside the addon. It needs no C++ compiler. First-time preparation is expensive and should be done while the game is closed. Source builds may use the individual steps:
 
+The setup script also accepts `-Height 1080` or `-Height 1440` and `-Model whitebox`, `-Model animegan`, or `-Model both` (default). For a 2560x1440 source, a 2560x1440 model avoids the neural downsample/upscale step. More pixels cost more GPU work; this is a quality option, not a guaranteed 60 FPS mode. To prepare only White-box at native 1440p:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup_neural.ps1 -Height 1440 -Model whitebox -Python <Python311.exe>
+```
+
+Keep existing lower-resolution profiles for comparison. In the running viewer, click Refresh, reselect the game window, choose `whitebox | 2560x1440 | fp16`, then Start. Refresh repopulates the selectors, so verify the source and profile before starting. The same cached engine can be selected in the normal addon's model controls.
+
 ```powershell
 .venv\Scripts\python.exe scripts/prepare_models.py whitebox --width 1280 --height 720 --image docs/images/original.png
 .venv\Scripts\python.exe scripts/prepare_models.py animegan --width 1280 --height 720 --image docs/images/original.png
@@ -35,6 +43,10 @@ TensorRT 10.13.3 supports the used weakly typed `--fp16` build option; external 
 ## Validation
 
 `build.ps1 -Test` runs exact RGBA GPU capture/copy comparisons at changing resolutions and unsupported-format rejection.
+
+It also runs `anime_viewer.exe --test-quality` without displaying windows. This compiles and executes the actual viewer shaders at 128x96, 512x288 and 2560x1440. It verifies softened diagonal edges, unchanged flat colors/straight edges, exact bypass, unchanged original split half, and exact original-pixel restoration inside HUD masks with AA on and off (unchanged output outside). Reports are under `build/viewer-edge-quality.json`.
+
+`anime_viewer.exe --test-image input.png --engine cache/<engine>.plan --report evaluation/viewer-image.json` uses the same GPU inference/composite shaders on a static image and writes PNG comparisons with AA off, AA on and the default top HUD region restored. It is an offline diagnostic, not a live capture or latency measurement. Runtime dependencies must be beside that executable.
 
 `cel_benchmark.exe input.png output.png engine.plan width height rgb|bgr iterations backend_directory` runs a native GPU-resident capture/inference/output path. Use `identity` instead of an engine to test CUDA preprocessing/upscaling without a model. CPU input loading and final PNG readback are outside timing; this is not a game benchmark. A JSON report is written beside the PNG.
 
