@@ -37,13 +37,17 @@ using Clock = std::chrono::steady_clock;
 namespace {
 constexpr UINT refresh_timer = 1;
 constexpr int source_id=101, profile_id=102, refresh_id=103, start_id=104, stop_id=105,
-    bypass_id=106, finish_id=107, split_id=108, overlay_id=109, strength_id=110, aa_id=111, hud_id=112, hud_apply_id=113, nis_id=114, quality_id=115, outlines_id=116;
+    bypass_id=106, finish_id=107, split_id=108, overlay_id=109, strength_id=110, aa_id=111, hud_id=112, hud_apply_id=113, nis_id=114, quality_id=115, outlines_id=116, tone_id=117, tone_apply_id=118;
 const wchar_t* window_class = L"AnimeNeuralViewer";
 fs::path base;
 HWND controls{}, viewer{}, source_combo{}, profile_combo{}, status_label{}, strength_combo{}, test_source{};
 HWND bypass_box{}, finish_box{}, split_box{}, overlay_box{}, aa_box{}, nis_box{};
 HWND quality_combo{};
 HWND outlines_box{};
+HWND tone_box{},tone_edits[3]{};
+std::atomic<bool> hard_tone{true};
+std::mutex tone_mutex;
+std::array<float,3> tone_settings{.60f,.35f,.90f};
 HWND hud_box{}, hud_region_boxes[3]{}, hud_edits[3][4]{};
 std::atomic<bool> stop_requested{false}, bypass{false}, finishing{true}, split{false}, running{false};
 std::atomic<float> strength{0.85f};
@@ -147,19 +151,32 @@ struct Capture {
 // BGRA capture is sampled through a typed SRV, then rendered into owned RGBA8.
 // No copy between incompatible BGRA/RGBA formats and no CPU readback in normal use.
 constexpr char shader[]=R"(
-cbuffer Settings : register(b0) { float2 texel; float blend; float stylize; float compare; float aa; float hud; float outlines; float4 hudRects[3]; };
+cbuffer Settings : register(b0) { float2 texel; float blend; float stylize; float compare; float aa; float hud; float outlines; float4 hudRects[3]; float4 tone; };
 Texture2D original : register(t0); Texture2D neural : register(t1); SamplerState linearClamp : register(s0);
 struct V { float4 position:SV_Position; float2 uv:TEXCOORD0; };
 V vs(uint id:SV_VertexID) { V o; o.uv=float2((id<<1)&2,id&2);o.position=float4(o.uv*float2(2,-2)+float2(-1,1),0,1);return o; }
 float4 copy(V i):SV_Target { return float4(original.SampleLevel(linearClamp,i.uv,0).rgb,1); }
 float luma(float3 c) { return dot(c,float3(.2126,.7152,.0722)); }
+float3 quantizeTone(float3 c) {
+ float value=max(c.r,max(c.g,c.b));
+ // Preserve existing near-black ink instead of lifting it to the shadow level.
+ if(value<=tone.w) return c;
+ float target=value<tone.x?tone.y:tone.z;
+ // Quantize HSV value, retaining channel ratios (hue and saturation).
+ return c*(target/value);
+}
 float4 finish(V i):SV_Target {
  float3 raw=original.SampleLevel(linearClamp,i.uv,0).rgb;
  if(compare>0.5 && i.uv.x<.5) return float4(raw,1);
  float3 c=lerp(raw,neural.SampleLevel(linearClamp,i.uv,0).rgb,blend);
  if(stylize>0.5) {
-  float y=luma(c);float shade=lerp(.66,1.08,smoothstep(.40,.43,y));c*=shade;
-  c=lerp(luma(c).xxx,c,1.18);
+  if(tone.x>=0) {
+   c=saturate(lerp(luma(c).xxx,c,1.18));
+   c=quantizeTone(c);
+  } else {
+   float y=luma(c);float shade=lerp(.66,1.08,smoothstep(.40,.43,y));c*=shade;
+   c=lerp(luma(c).xxx,c,1.18);
+  }
   if(outlines>.5) {
    float edge=abs(luma(original.SampleLevel(linearClamp,i.uv+float2(texel.x,0),0).rgb)-luma(original.SampleLevel(linearClamp,i.uv-float2(texel.x,0),0).rgb));
    edge+=abs(luma(original.SampleLevel(linearClamp,i.uv+float2(0,texel.y),0).rgb)-luma(original.SampleLevel(linearClamp,i.uv-float2(0,texel.y),0).rgb));
@@ -203,7 +220,7 @@ float4 antialias(V i):SV_Target {
                  +.15*(original.SampleLevel(linearClamp,i.uv-tangent,0).rgb+original.SampleLevel(linearClamp,i.uv+tangent,0).rgb);
  return float4(lerp(c,filtered,amount),1);
 })";
-struct Constants {float x{},y{},blend{},stylize{},compare{},aa{},hud{},outlines{};Rectangles rectangles{};};
+struct Constants {float x{},y{},blend{},stylize{},compare{},aa{},hud{},outlines{};Rectangles rectangles{};std::array<float,4> tone{-1,.35f,.90f,.035f};};
 struct Graphics {
     ComPtr<ID3D11Device> device;ComPtr<ID3D11DeviceContext> context;ComPtr<IDXGISwapChain1> swap;
     ComPtr<ID3D11VertexShader> vs;ComPtr<ID3D11PixelShader> copy,finish,antialias;
@@ -277,6 +294,7 @@ struct Graphics {
         }
         Constants c{1.f/bridge.width(),1.f/bridge.height(),neural&&!raw?strength.load():0.f,!raw&&finishing?1.f:0.f,!raw&&split?1.f:0.f};
         c.aa=edge_aa?1.f:0.f;c.hud=preserve_hud&&!raw?1.f:0.f;c.outlines=extra_outlines?1.f:0.f;
+        if(hard_tone){std::lock_guard lock(tone_mutex);c.tone={tone_settings[0],tone_settings[1],tone_settings[2],.035f};}
         if(c.hud>.5f){std::lock_guard lock(hud_mutex);c.rectangles=hud_regions;}
         draw(final_target.Get(),bridge.original_view(),processed,finish.Get(),full(),c);
         aa_active=!raw&&(edge_aa||preserve_hud);
@@ -361,6 +379,24 @@ void run_quality_test() {
         g.compose(false,true);if(g.read_pixels(g.result_texture())!=input)throw std::runtime_error("HUD bypass is not exact");
         preserve_hud=false;edge_aa=true;finishing=false;
     }
+    // A brightness ramp must collapse to two bands, not two multipliers that
+    // leave the original gradients intact. Colored rows exercise gamut limits.
+    g.resize(256,8);std::vector<uint8_t> ramp(256*8*4);
+    for(UINT y=0;y<8;++y)for(UINT x=0;x<256;++x){size_t p=(y*256+x)*4;
+        ramp[p]=y==0?uint8_t(x):uint8_t(40+(x*215/255));
+        ramp[p+1]=y==0?uint8_t(x):uint8_t(y&1?x:20);
+        ramp[p+2]=y==0?uint8_t(x):uint8_t(y&2?x:10);ramp[p+3]=255;}
+    g.context->UpdateSubresource(g.bridge.input(),0,nullptr,ramp.data(),256*4,0);
+    finishing=true;hard_tone=true;edge_aa=false;extra_outlines=false;
+    g.compose(false,false);auto tones=g.read_pixels(g.result_texture());size_t tone_pixels=0;
+    for(size_t p=0;p<tones.size();p+=4){float value=float(std::max({tones[p],tones[p+1],tones[p+2]}));
+        if(p<9*4){if(memcmp(ramp.data()+p,tones.data()+p,4)!=0)throw std::runtime_error("Two-tone lifted existing black ink");continue;}
+        if(std::min(abs(value-.35f*255),abs(value-.90f*255))>.55f)throw std::runtime_error("Two-tone left intermediate brightness in a flat region");++tone_pixels;}
+    if(tones[50*4]!=89||abs(int(tones[200*4])-230)>1)throw std::runtime_error("Two-tone ramp lacks distinct shadow and light bands");
+    tone_settings[0]=.4f;g.compose(false,false);auto shifted=g.read_pixels(g.result_texture());tone_settings[0]=.6f;
+    if(tones[128*4]!=89||abs(int(shifted[128*4])-230)>1)throw std::runtime_error("Two-tone threshold does not move the shadow boundary");
+    g.compose(false,true);if(g.read_pixels(g.result_texture())!=ramp)throw std::runtime_error("Two-tone bypass is not exact");
+    finishing=false;edge_aa=true;
     size_t nis_different=0,nis_nonreplicated=0;unsigned nis_cases=0;
     for(auto dims:{std::array<UINT,4>{1280,720,2560,1440},{1920,1080,2560,1440},{129,73,257,145},{128,96,128,96}}) {
         auto [mw,mh,w,h]=dims;g.resize(w,h);g.configure_model(mw,mh);
@@ -408,7 +444,8 @@ void run_image_test(const Profile& profile) {
         if(w==g.model_width&&h==g.model_height&&grid!=g.read_pixels(g.bridge.output()))throw std::runtime_error("Native model grid differs from legacy output");
         save(prefix.wstring()+L"-model-grid.png",std::move(grid),g.model_width,g.model_height);
     }
-    edge_aa=false;use_nis=false;g.compose(backend.state!=nullptr,false);save(prefix.wstring()+L"-bilinear.png",g.read_pixels(g.result_texture()),w,h);use_nis=true;
+    edge_aa=false;hard_tone=false;g.compose(backend.state!=nullptr,false);save(prefix.wstring()+L"-legacy-tones.png",g.read_pixels(g.result_texture()),w,h);hard_tone=true;
+    use_nis=false;g.compose(backend.state!=nullptr,false);save(prefix.wstring()+L"-bilinear.png",g.read_pixels(g.result_texture()),w,h);use_nis=true;
     g.compose(backend.state!=nullptr,false);auto before=g.read_pixels(g.result_texture());save(prefix.wstring()+L"-aa-off.png",before,w,h);
     edge_aa=true;g.compose(backend.state!=nullptr,false);auto after=g.read_pixels(g.result_texture());save(prefix.wstring()+L"-aa-on.png",after,w,h);
     extra_outlines=true;g.compose(backend.state!=nullptr,false);save(prefix.wstring()+L"-outlines-on.png",g.read_pixels(g.result_texture()),w,h);extra_outlines=false;
@@ -573,6 +610,15 @@ LRESULT CALLBACK window_proc(HWND h,UINT message,WPARAM wp,LPARAM lp) {
             case aa_id:edge_aa=SendMessageW(aa_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
             case nis_id:use_nis=SendMessageW(nis_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
             case outlines_id:extra_outlines=SendMessageW(outlines_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
+            case tone_id:hard_tone=SendMessageW(tone_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
+            case tone_apply_id:{
+                std::array<float,3> next{};bool valid=true;
+                for(int i=0;i<3;++i){wchar_t text[64]{};GetWindowTextW(tone_edits[i],text,64);wchar_t* end{};double value=wcstod(text,&end);
+                    if(end==text||*end||!std::isfinite(value)||value<0||value>100){valid=false;break;}next[i]=float(value/100.0);}
+                if(!valid||next[1]>=next[2]){status(L"Tone values must be 0-100, with Shadow below Light.");break;}
+                {std::lock_guard lock(tone_mutex);tone_settings=next;}
+                status(L"Tone levels applied. Hard two-tone requires DBZ finishing. HUD masks remain original.");break;
+            }
             case hud_id:preserve_hud=SendMessageW(hud_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
             case hud_apply_id:apply_hud_regions();break;
             case split_id:split=SendMessageW(split_box,BM_GETCHECK,0,0)==BST_CHECKED;break;
@@ -611,7 +657,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         int count{};auto args=CommandLineToArgvW(GetCommandLineW(),&count);fs::path test_engine;
         for(int i=1;i<count;++i) {std::wstring arg=args[i];if(arg==L"--self-test")self_test=true;else if(arg==L"--test-quality")quality_test=true;else if(arg==L"--test-image"&&i+1<count)image_test_path=args[++i];else if(arg==L"--demo")demo=true;else if(arg==L"--engine"&&i+1<count)test_engine=args[++i];else if(arg==L"--report"&&i+1<count)report_path=args[++i];else {LocalFree(args);throw std::runtime_error("Options: --demo | --self-test | --test-quality | --test-image input.png [--engine engine.plan] [--report result.json]");}}LocalFree(args);
         WNDCLASSW wc{};wc.lpfnWndProc=window_proc;wc.hInstance=instance;wc.lpszClassName=window_class;wc.hCursor=LoadCursorW(nullptr,IDC_ARROW);wc.hbrBackground=GetSysColorBrush(COLOR_WINDOW);RegisterClassW(&wc);
-        controls=CreateWindowExW(0,window_class,L"Anime Neural Viewer - external capture",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,60,60,680,672,nullptr,nullptr,instance,nullptr);
+        controls=CreateWindowExW(0,window_class,L"Anime Neural Viewer - external capture",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX,60,60,680,744,nullptr,nullptr,instance,nullptr);
         viewer=CreateWindowExW(WS_EX_APPWINDOW,window_class,L"Anime Neural Viewer - styled output",WS_OVERLAPPEDWINDOW,760,180,960,580,nullptr,nullptr,instance,nullptr);
         if(quality_test){run_quality_test();DestroyWindow(viewer);DestroyWindow(controls);return 0;}
         if(!image_test_path.empty()){run_image_test(test_engine.empty()?Profile{}:load_profile(test_engine));DestroyWindow(viewer);DestroyWindow(controls);return 0;}
@@ -647,8 +693,13 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int) {
         control(L"STATIC",L"Masks also preserve scenery behind the HUD. Edit bounds, then Apply HUD regions.",0,16,400,630,20);
         control(L"STATIC",L"Processing quality",0,16,435,180,20);
         quality_combo=control(L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_VSCROLL|WS_TABSTOP,210,430,436,180,quality_id);
-        status_label=control(L"STATIC",L"",0,16,480,630,84);
-        control(L"STATIC",L"Runs outside the game. Capture can be restricted by the game or Windows.\r\nQuality lists prepared resolutions for this model; click Start to apply.\r\nNIS is spatial upscaling, not DLSS / frame generation. See README.",0,16,572,630,58);
+        tone_box=control(L"BUTTON",L"Hard two-tone",BS_AUTOCHECKBOX|WS_TABSTOP,16,478,180,24,tone_id);SendMessageW(tone_box,BM_SETCHECK,BST_CHECKED,0);
+        const wchar_t* tone_labels[]={L"Threshold %",L"Shadow %",L"Light %"};const wchar_t* tone_defaults[]={L"60",L"35",L"90"};
+        for(int i=0;i<3;++i){control(L"STATIC",tone_labels[i],0,210+i*104,466,100,20);tone_edits[i]=control(L"EDIT",tone_defaults[i],WS_BORDER|ES_AUTOHSCROLL|WS_TABSTOP,210+i*104,488,86,23);}
+        control(L"BUTTON",L"Apply tones",WS_TABSTOP,532,486,114,26,tone_apply_id);
+        control(L"STATIC",L"Two brightness bands; retains hue and dark ink. Requires DBZ finishing.",0,16,520,630,20);
+        status_label=control(L"STATIC",L"",0,16,552,630,84);
+        control(L"STATIC",L"Runs outside the game. Capture can be restricted by the game or Windows.\r\nQuality lists prepared resolutions for this model; click Start to apply.\r\nNIS is spatial upscaling, not DLSS / frame generation. See README.",0,16,644,630,58);
         refresh_sources();refresh_profiles();
         bool hotkeys=RegisterHotKey(controls,1,MOD_NOREPEAT,VK_F10)!=0;hotkeys=RegisterHotKey(controls,2,MOD_NOREPEAT,VK_F9)!=0&&hotkeys;
         if(!hotkeys)status(L"A global F9/F10 shortcut is in use. Use the visible bypass/overlay controls.");

@@ -183,7 +183,7 @@ void overlay(effect_runtime* r){
         if(ImGui::Button("Reset addon settings")){s->mode=0;s->width=1280;s->height=720;s->bgr=false;s->key=VK_F10;strcpy_s(s->engine,"cache/active.plan");save(r,*s);if(!s->pending.valid())prepare(r,*s);}
         auto reset=[&](std::initializer_list<const char*> names){for(auto name:names){auto u=r->find_uniform_variable("CelShade.fx",name);if(u.handle)r->reset_uniform_value(u);}};
         if(ImGui::Button("Reset Neural"))reset({"CelStrength"});ImGui::SameLine();
-        if(ImGui::Button("Reset Two tone"))reset({"CelToneAmount","CelThreshold","CelSoftness","CelShadowLevel","CelLightLevel","CelLiteral","CelLightTint","CelShadowTint","CelTintStrength"});
+        if(ImGui::Button("Reset Two tone"))reset({"CelToneAmount","CelThreshold","CelSoftness","CelShadowLevel","CelLightLevel","CelLiteral","CelLightTint","CelShadowTint","CelTintStrength","CelPreserveInk","CelValueBands"});
         if(ImGui::Button("Reset Outlines"))reset({"CelOutlineStrength","CelOutlineWidth","CelOutlineThreshold"});ImGui::SameLine();
         if(ImGui::Button("Reset Color"))reset({"CelSaturation","CelExposure"});
         if(ImGui::Button("Reset all finishing controls"))r->enumerate_uniform_variables("CelShade.fx",[](effect_runtime* runtime,effect_uniform_variable v,void*){runtime->reset_uniform_value(v);},nullptr);

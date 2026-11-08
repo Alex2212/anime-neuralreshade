@@ -50,6 +50,8 @@ It also runs `anime_viewer.exe --test-quality` without displaying windows. This 
 
 Preview 3 also tests NIS 720p/1080p to 1440p, odd dimensions, flat border colors, full output coverage, unsupported scale rejection and exact native copying. Image diagnostics additionally save the raw model grid and a bilinear reference with the same finishing settings. For a native-sized source/model pair, the new grid must exactly match the legacy output, checking channel order and quantization. Keep the viewer, backend and PTX from the same release; the new viewer explicitly rejects a backend/PTX lacking native-grid support.
 
+Preview 4 adds ramp/colored-row checks for two HSV-value bands, threshold movement, near-black ink preservation and exact bypass. Image diagnostics write a `-legacy-tones.png` comparison as well as the hard-tone output. AA can introduce intermediate values at boundaries; the band test measures the finishing pass before AA.
+
 `cel_benchmark.exe input.png output.png engine.plan width height rgb|bgr iterations backend_directory` runs a native GPU-resident capture/inference/output path. Use `identity` instead of an engine to test CUDA preprocessing/upscaling without a model. CPU input loading and final PNG readback are outside timing; this is not a game benchmark. A JSON report is written beside the PNG.
 
 `scripts/test_harness.ps1` uses a separately downloaded full-addon ReShade DLL in an isolated hidden D3D11 process. It verifies the addon is actually loaded, FX compilation, same-frame alternating-color output, two resizes, and clean shutdown. Diagnostic readbacks occur only in the test executable.

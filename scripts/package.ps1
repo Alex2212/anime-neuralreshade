@@ -1,4 +1,4 @@
-param([string]$Version='0.1.0-preview.3',[string]$RuntimeStage='dist/local')
+param([string]$Version='0.1.0-preview.4',[string]$RuntimeStage='dist/local')
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 $ptx=Join-Path (Join-Path $root $RuntimeStage) 'kernels.ptx'

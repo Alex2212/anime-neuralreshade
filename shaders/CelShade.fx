@@ -19,9 +19,11 @@ uniform float CelSmoothing < ui_category="Surface smoothing"; ui_label="Edge-pre
 uniform float CelToneAmount < ui_category="Two tone"; ui_label="Two-tone amount"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.0;
 uniform float CelThreshold < ui_category="Two tone"; ui_label="Shadow threshold"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.4;
 uniform float CelSoftness < ui_category="Two tone"; ui_label="Transition softness"; ui_type="slider"; ui_min=0.0; ui_max=0.25; > = 0.0;
-uniform float CelShadowLevel < ui_category="Two tone"; ui_label="Shadow luminance"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.16;
-uniform float CelLightLevel < ui_category="Two tone"; ui_label="Light luminance"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.65;
+uniform float CelShadowLevel < ui_category="Two tone"; ui_label="Shadow level"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.16;
+uniform float CelLightLevel < ui_category="Two tone"; ui_label="Light level"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.65;
 uniform bool CelLiteral < ui_category="Two tone"; ui_label="Literal two-color palette"; > = false;
+uniform bool CelPreserveInk < ui_category="Two tone"; ui_label="Preserve near-black ink"; > = true;
+uniform bool CelValueBands < ui_category="Two tone"; ui_label="Quantize color brightness (HSV value)"; > = false;
 uniform float3 CelLightTint < ui_category="Two tone"; ui_label="Light color"; ui_type="color"; > = float3(1.0,0.96,0.88);
 uniform float3 CelShadowTint < ui_category="Two tone"; ui_label="Shadow color"; ui_type="color"; > = float3(0.24,0.22,0.34);
 uniform float CelTintStrength < ui_category="Two tone"; ui_label="Tint strength"; ui_type="slider"; ui_min=0.0; ui_max=1.0; > = 0.1;
@@ -61,10 +63,13 @@ float4 CelSmoothPS(float4 pos:SV_Position,float2 uv:TEXCOORD):SV_Target{
 }
 float4 CelTonePS(float4 pos:SV_Position,float2 uv:TEXCOORD):SV_Target{
     float4 c=tex2D(CelCurrent,uv);float l=CelLuma(c.rgb);
-    float mask=CelSoftness<=0?step(CelThreshold,l):smoothstep(CelThreshold-CelSoftness,CelThreshold+CelSoftness,l);
+    float brightness=CelValueBands?max(c.r,max(c.g,c.b)):l;
+    if(CelPreserveInk&&!CelLiteral&&brightness<=0.035)return CelFinish(uv,c);
+    float mask=CelSoftness<=0?step(CelThreshold,brightness):smoothstep(CelThreshold-CelSoftness,CelThreshold+CelSoftness,brightness);
     float3 tint=lerp(CelShadowTint,CelLightTint,mask);
+    float level=lerp(CelShadowLevel,CelLightLevel,mask);
     float3 target=CelLiteral?lerp(CelShadowTint,CelLightTint,step(CelThreshold,l)):
-        saturate(c.rgb*(lerp(CelShadowLevel,CelLightLevel,mask)/max(l,0.001)))*lerp(float3(1,1,1),tint,CelTintStrength);
+        saturate(c.rgb*(level/max(brightness,0.001)))*lerp(float3(1,1,1),tint,CelTintStrength);
     return CelFinish(uv,float4(lerp(c.rgb,target,CelToneAmount),c.a));
 }
 float4 CelOutlinePS(float4 pos:SV_Position,float2 uv:TEXCOORD):SV_Target{

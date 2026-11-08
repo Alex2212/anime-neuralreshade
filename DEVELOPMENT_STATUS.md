@@ -2,6 +2,7 @@
 
 ## Implemented
 
+- Adjustable hard two-tone finishing: two HSV-value bands, preserved near-black ink, live threshold/shadow/light controls and a legacy shading toggle. The DBZ addon preset applies full-strength value quantization after color grading, while custom luminance/literal modes remain available.
 - Added outline darkening is optional and defaults off in the viewer, addon FX and DBZ preset. The viewer exposes an Extra outlines checkbox while keeping color/shadow styling independent.
 - Viewer NIS upscaling from a native model-grid texture, native-resolution exact copy, explicit bilinear fallback diagnostics, and a quality dropdown restricted to installed resolutions for the same model/precision. The optional backend export preserves the normal addon's existing ABI and output path.
 - External x64 Windows Graphics Capture viewer with bounded capture buffers, own D3D11 device/presentation, explicit BGRA-to-RGBA GPU conversion, both model profiles, live blend, fixed DBZ finishing, bypass, split and optional click-through overlay. No game process modification.
@@ -23,6 +24,7 @@ Preview 3 checks: NIS scaling at 720p/1080p to 1440p and odd dimensions passed f
 
 ## Pending before a stable release
 
+- Preview 4 passed native compilation, the GPU ramp/colored-row band checks, threshold movement, preserved ink and exact bypass; existing NIS/AA/HUD tests passed. Static White-box combat output was inspected. Per-material lighting separation and live temporal acceptance are not established by these tests.
 - Actual neural rendering in Xenoverse 2 is blocked on the tested EAC-protected launch: EAC rejected the full-addon ReShade DLL. The attempted installation was fully rolled back and original DLL/configuration hashes verified. No protection bypass was performed.
 - The user supplied gameplay styling screenshots and reported 1080p inference / 1440p capture. Controlled EAC-launch, overlay and live quality acceptance remain unverified; manual Computer Use was previously stopped by the user.
 - Controlled, end-to-end 30/60 FPS combat captures and input-latency measurements.
@@ -32,6 +34,6 @@ Preview 3 checks: NIS scaling at 720p/1080p to 1440p and odd dimensions passed f
 
 ## Not implemented
 
-DLSS Super Resolution, DLSS Frame Generation, motion-aware temporal stabilization, automatic/pre-HUD capture, separate game UI-pass access, other addon graphics APIs, x86, and non-NVIDIA inference. Viewer shading parameters remain fixed; its AA and manual HUD controls are independent. No new model training has begun.
+DLSS Super Resolution, DLSS Frame Generation, motion-aware temporal stabilization, automatic/pre-HUD capture, separate game UI-pass access, other addon graphics APIs, x86, and non-NVIDIA inference. Viewer tone levels are adjustable; its saturation remains fixed. No new model training has begun.
 
 Public release is a development preview. Public payload excludes weights, generated TensorRT engines, NVIDIA runtime binaries, ReShade binaries and game assets beyond the authorized README screenshots.

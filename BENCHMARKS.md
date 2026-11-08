@@ -4,6 +4,8 @@ These measurements are from **8 November 2026**, RTX 5090, NVIDIA driver 621.14,
 
 ## Native static-image processing
 
+Preview 4 GPU validation checks a continuous grayscale ramp and colored rows: 2,039 non-ink pixels land in the configured 35%/90% HSV-value bands within 8-bit rounding. Nine near-black ramp pixels are preserved. A threshold change moves a mid-gray sample between the bands, and bypass remains exact. This establishes hard value quantization, not material-aware relighting or a guarantee of exactly two colors per object. Static White-box 1080p-to-1440p NIS output was rendered and inspected with the final shader.
+
 Preview 3 validation adds NVIDIA Image Scaling directly from the raw model grid. GPU tests passed 1280x720 and 1920x1080 to 2560x1440, odd 129x73 to 257x145, and exact native copying. Across the three scaled synthetic cases, 44,804 pixels differed from bilinear and 44,897 differed from nearest-neighbor replication. Flat border colors stayed within one channel level and every output pixel had valid alpha. These checks distinguish the implemented filter from basic enlargement; they are not an image-quality score.
 
 The shared backend still passed White-box 1080p FP16 versus ONNX (max channel error 6.1784, mean 0.2552, p99 0.5769). Both White-box BGR and AnimeGAN RGB native grids matched legacy native output exactly. Static combat diagnostics rendered White-box 1080p NIS, White-box 1440p native, and AnimeGAN 720p NIS. Live NIS frame-time and motion-quality acceptance remain pending; the earlier timings below exclude this new NIS pass.
