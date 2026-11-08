@@ -1,0 +1,15 @@
+/external/
+/.venv/
+/build/
+/dist/
+/cache/
+/models/*.onnx
+/models/*.plan
+/evaluation/
+*.log
+*.pdb
+*.user
+.~lock.*
+/Anime_ReShade_Codex_Implementation_Brief.docx
+__pycache__/
+*.pyc

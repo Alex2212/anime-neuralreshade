@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "name": "animegan",
+  "upstream": "https://github.com/TachibanaYoshino/AnimeGANv2",
+  "revision": "724b5ce75185c2e838d30c9077dbb967ab034254",
+  "weight_filename": "Shinkai_53.pb",
+  "weight_sha256": "490753fd6572606406f598fd5668c9c1e5b6c084cb58874e169403229600f4d8",
+  "onnx_sha256": "ffe5c89ebdde762d0e86a5071907c586bf914d364a1d23231f377f0c0b4b80bf",
+  "input": "generator_input:0",
+  "output": "generator/G_MODEL/out_layer/Tanh:0",
+  "shape": [
+    1,
+    720,
+    1280,
+    3
+  ],
+  "layout": "NHWC",
+  "dtype": "float32",
+  "color": "RGB",
+  "normalization": "display-encoded channel / 127.5 - 1",
+  "postprocessing": "(output + 1) * 127.5, clip [0,255]",
+  "official_pipeline": "Official frozen Shinkai_53 generator, optional brightness adjustment disabled (supported by official test.py)",
+  "runtime_resize": "Aspect-preserving bilinear fit with edge padding; inverse fit on output. Evaluation source already resized to exact dimensions. Runtime resize is an explicit deployment policy, distinct from upstream resize/crop.",
+  "license_evidence": "external/AnimeGANv2/README.md",
+  "redistribution": "Unreviewed; local evaluation only; no weights or engines approved for public distribution",
+  "parity": {
+    "max_abs": 0.0031207799911499023,
+    "mean_abs": 0.0010803972836583853,
+    "acceptance": {
+      "max_abs": 0.01,
+      "mean_abs": 0.002
+    }
+  },
+  "evaluation_image_sha256": "cfec3591cae151408508ed18681a8b471304c137da0fc4b56c9e3cae388e03f1"
+}

@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "name": "whitebox",
+  "upstream": "https://github.com/SystemErrorWang/White-box-Cartoonization",
+  "revision": "ee97277d7fd873b89e9b8e1341efe74e10dd4124",
+  "weight_filename": "model-33999.data-00000-of-00001",
+  "weight_sha256": "1e2df1a5aa86faa4f979720bfc2436f79333a480876f8d6790b7671cf50fe75b",
+  "onnx_sha256": "df78796330e8e6d8ad66af5b14ffd08d514a6833844f7d416f99903236f4785b",
+  "input": "cel_input:0",
+  "output": "cel_output:0",
+  "shape": [
+    1,
+    1080,
+    1920,
+    3
+  ],
+  "layout": "NHWC",
+  "dtype": "float32",
+  "color": "BGR",
+  "normalization": "display-encoded channel / 127.5 - 1",
+  "postprocessing": "(output + 1) * 127.5, clip [0,255]",
+  "official_pipeline": "Official generator plus guided filter r=1 eps=0.005; TF1 APIs mapped to compat.v1 and tf_slim without changing operations or weights",
+  "runtime_resize": "Aspect-preserving bilinear fit with edge padding; inverse fit on output. Evaluation source already resized to exact dimensions. Runtime resize is an explicit deployment policy, distinct from upstream resize/crop.",
+  "license_evidence": "external/White-box-Cartoonization/README.md",
+  "redistribution": "Unreviewed; local evaluation only; no weights or engines approved for public distribution",
+  "parity": {
+    "max_abs": 5.245208740234375e-06,
+    "mean_abs": 8.578961541161334e-08,
+    "acceptance": {
+      "max_abs": 0.01,
+      "mean_abs": 0.002
+    }
+  },
+  "evaluation_image_sha256": "cfec3591cae151408508ed18681a8b471304c137da0fc4b56c9e3cae388e03f1"
+}

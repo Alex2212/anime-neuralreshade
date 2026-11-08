@@ -1,0 +1,6 @@
+{
+  "version": 6,
+  "configurePresets": [{"name":"windows-release","generator":"Ninja","binaryDir":"${sourceDir}/build","cacheVariables":{"CMAKE_BUILD_TYPE":"Release"}}],
+  "buildPresets": [{"name":"windows-release","configurePreset":"windows-release"}],
+  "testPresets": [{"name":"windows-release","configurePreset":"windows-release","output":{"outputOnFailure":true}}]
+}
